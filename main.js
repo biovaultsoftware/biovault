@@ -614,7 +614,21 @@ async function init() {
     document.getElementById('swap-tvm-usdt-btn').addEventListener('click', ContractInteractions.swapTVMForUSDT);
     document.getElementById('swap-usdt-tvm-btn').addEventListener('click', ContractInteractions.swapUSDTForTVM);
     document.getElementById('connect-wallet').addEventListener('click', Wallet.connectMetaMask); // Default to MetaMask
-
+    // Add showSection function
+    function showSection(sectionId) {
+      const sections = ['home-section', 'msl-section', 'scl-section', 'dashboard-section'];
+      sections.forEach(id => document.getElementById(id).classList.add('hidden'));
+      document.getElementById(sectionId).classList.remove('hidden');
+    }
+    
+    // In init(): Add listeners for navigation buttons
+    document.getElementById('home-btn').addEventListener('click', () => showSection('home-section'));
+    document.getElementById('msl-btn').addEventListener('click', () => showSection('msl-section'));
+    document.getElementById('scl-btn').addEventListener('click', () => showSection('scl-section'));
+    document.getElementById('dashboard-btn').addEventListener('click', () => showSection('dashboard-section'));
+    document.getElementById('enter-msl').addEventListener('click', () => showSection('msl-section'));
+    document.getElementById('enter-scl').addEventListener('click', () => showSection('scl-section'));
+    document.getElementById('enter-blockchain').addEventListener('click', () => showSection('dashboard-section'));
     // Idle Timeout
     setTimeout(Vault.lockVault, MAX_IDLE);
 
