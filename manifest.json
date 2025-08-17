@@ -1,5 +1,5 @@
 {
-  "name": "Bio-Vault | BalanceChain | TVM",
+  "name": "Bio-Vault | BalanceChain | TVM", 
   "short_name": "BioVault",
   "description": "Audit-proof, pegged, human-effort digital money vault. 1 TVM = 1 USD. BalanceChain protocol.",
   "start_url": "./index.html",
