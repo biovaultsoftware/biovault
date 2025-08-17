@@ -1,4 +1,4 @@
-/****************************** 
+/******************************
  * main.js - Production-Ready as of August 16, 2025
  * Baseline: Smart Contract (Finalized, No Changes)
  * Consistency: SHE/ECF Framework, Fixed 12 SHE/TVM Peg with Dynamic Pricing, Offline P2P (MSL), Centralized SCL for Institutions
@@ -9,7 +9,6 @@
  * Fixed: Enter vault passphrase prompt, connect wallet functionality (MetaMask/WalletConnect).
  * Added: P2P segments transfer (Catch In/Out) with micro-ledger per segment (10 history events), ZKP for biometric human validation, validation on receive, update balance/transaction history.
  ******************************/
-
 // Base Setup / Global Constants (From main.js, Updated for 2025 Standards)
 const DB_NAME = 'BioVaultDB';
 const DB_VERSION = 3;
@@ -112,7 +111,6 @@ const VAULT_BACKUP_KEY = 'vaultArmoredBackup';
 const STORAGE_CHECK_INTERVAL = 300000;
 const vaultSyncChannel = new BroadcastChannel('vault-sync');
 const WALLET_CONNECT_PROJECT_ID = 'your_project_id_here'; // Replace with actual WalletConnect Project ID for production
-
 // State (Integrated Vault Data)
 let vaultUnlocked = false;
 let derivedKey = null;
@@ -131,7 +129,6 @@ let autoSignature = '';
 let autoExchangeAmount = 0;
 let autoSwapAmount = 0;
 let autoSwapUSDTAmount = 0;
-
 let vaultData = {
   bioIBAN: null,
   initialBioConstant: INITIAL_BIO_CONSTANT,
@@ -149,9 +146,7 @@ let vaultData = {
   deviceKeyHash: "",
   layerBalances: Array.from({length: LAYERS}, () => 0)
 };
-
 vaultData.layerBalances[0] = INITIAL_BALANCE_SHE;
-
 // Utils Module (Full from main.js)
 const Utils = {
   enc: new TextEncoder(),
@@ -181,7 +176,6 @@ const Utils = {
   },
   sanitizeInput: (input) => DOMPurify.sanitize(input)
 };
-
 // Encryption Module
 const Encryption = {
   encryptData: async (key, dataObj) => {
@@ -197,7 +191,6 @@ const Encryption = {
   bufferToBase64: (buf) => Utils.toB64(buf),
   base64ToBuffer: (b64) => Utils.fromB64(b64)
 };
-
 // DB Module (Added SEGMENTS_STORE)
 const DB = {
   openVaultDB: async () => {
@@ -310,7 +303,6 @@ const DB = {
     });
   }
 };
-
 // Biometric Module (WebAuthn for 2025 Compliance, with broader alg support)
 const Biometric = {
   performBiometricAuthenticationForCreation: async () => {
@@ -362,7 +354,6 @@ const Biometric = {
     return null;
   }
 };
-
 // Vault Module
 const Vault = {
   deriveKeyFromPIN: async (pin, salt) => {
@@ -410,7 +401,6 @@ const Vault = {
     Vault.updateVaultUI();
   }
 };
-
 // Wallet Module (MetaMask + WalletConnect v2 for 2025, with button enabling)
 const Wallet = {
   connectMetaMask: async () => {
@@ -473,7 +463,6 @@ const Wallet = {
     }
   }
 };
-
 // Proofs Module (For Claim Signing and Auto-Generation)
 const Proofs = {
   generateAutoProof: async () => {
@@ -521,7 +510,6 @@ const Proofs = {
     return signature;
   }
 };
-
 // UI Module (Extended for Dashboard)
 const UI = {
   showAlert: (msg) => alert(msg),
@@ -532,7 +520,6 @@ const UI = {
     document.getElementById('wallet-address').textContent = account ? `Connected: ${account.slice(0,6)}...${account.slice(-4)}` : '';
   }
 };
-
 // Contract Interactions (Auto from Proofs, Buttons Only)
 const ContractInteractions = {
   claimTVM: async () => {
@@ -608,7 +595,6 @@ const ContractInteractions = {
     }
   }
 };
-
 // Segment Module (Micro-Ledger per Segment)
 const Segment = {
   initializeSegments: async () => {
@@ -656,7 +642,6 @@ const Segment = {
     return true;
   }
 };
-
 // P2P Module (Catch In/Out - NFC/WebRTC for Offline, with Micro-Ledger and ZKP)
 const P2P = {
   handleCatchOut: async () => {
@@ -736,7 +721,6 @@ const P2P = {
     }
   }
 };
-
 // Notifications Module
 const Notifications = {
   requestPermission: () => {
@@ -750,7 +734,6 @@ const Notifications = {
     }
   }
 };
-
 // Backup/Export Functions
 function exportTransactions() {
   const blob = new Blob([JSON.stringify(vaultData.transactions)], { type: 'application/json' });
@@ -760,7 +743,6 @@ function exportTransactions() {
   a.download = 'transactions.json';
   a.click();
 }
-
 function backupVault() {
   const backup = JSON.stringify(vaultData);
   const blob = new Blob([backup], { type: 'application/json' });
@@ -770,12 +752,10 @@ function backupVault() {
   a.download = 'vault.backup';
   a.click();
 }
-
 function exportFriendlyBackup() {
   // Armored or encrypted backup
   alert('Exporting friendly backup...');
 }
-
 function importVault() {
   const file = document.getElementById('importVaultInput').files[0];
   if (file) {
@@ -788,29 +768,24 @@ function importVault() {
     reader.readAsText(file);
   }
 }
-
 function copyToClipboard(id) {
   const text = document.getElementById(id).textContent;
   navigator.clipboard.writeText(text).then(() => UI.showAlert('Copied!'));
 }
-
 // Export Proof to Blockchain (Auto-Load into Dashboard)
 function exportProofToBlockchain() {
   showSection('dashboard');
   Proofs.loadAutoProof();
   UI.showAlert('Proof auto-exported to dashboard actions.');
 }
-
 // Section Switching
 function showSection(id) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active-section'));
   document.getElementById(id).classList.add('active-section');
   if (id === 'dashboard') loadDashboardData();
 }
-
 // Theme Toggle
 document.getElementById('theme-toggle').addEventListener('click', () => document.body.classList.toggle('dark-mode'));
-
 // Enable Dashboard Buttons after Connection
 function enableDashboardButtons() {
   document.getElementById('claim-tvm-btn').disabled = false;
@@ -818,17 +793,14 @@ function enableDashboardButtons() {
   document.getElementById('swap-tvm-usdt-btn').disabled = false;
   document.getElementById('swap-usdt-tvm-btn').disabled = false;
 }
-
 // PWA Service Worker Registration
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => console.log('Service Worker Registered')).catch(err => console.error('Registration failed', err));
 }
-
 // Init Function (Full from main.js, Integrated)
 async function init() {
   Notifications.requestPermission();
   P2P.handleNfcRead(); // Start NFC if supported
-
   const stored = await DB.loadVaultDataFromDB();
   if (stored) {
     vaultData.authAttempts = stored.authAttempts;
@@ -848,7 +820,6 @@ async function init() {
       await Segment.initializeSegments(); // Init segments on creation
     }
   }
-
   // Event Listeners
   document.getElementById('connectMetaMaskBtn').addEventListener('click', Wallet.connectMetaMask);
   document.getElementById('connectWalletConnectBtn').addEventListener('click', Wallet.connectWalletConnect);
@@ -891,25 +862,20 @@ async function init() {
   document.getElementById('swap-tvm-usdt-btn').addEventListener('click', ContractInteractions.swapTVMForUSDT);
   document.getElementById('swap-usdt-tvm-btn').addEventListener('click', ContractInteractions.swapUSDTForTVM);
   document.getElementById('connect-wallet').addEventListener('click', Wallet.connectMetaMask); // Default to MetaMask, or add dropdown
-
   // Idle Timeout
   setTimeout(Vault.lockVault, MAX_IDLE);
-
   // UTC Time Update
   setInterval(() => {
     document.getElementById('utcTime').textContent = new Date().toUTCString();
   }, 1000);
-
   // Load Dashboard on Init if Needed
   loadDashboardData();
 }
-
 // Load Dashboard Data (Real Contract Calls + Charts)
 async function loadDashboardData() {
   if (!tvmContract) return;
   // Update Balances
   await Wallet.updateBalances();
-
   // Layer Table (Mock/Real - Assume contract has getLayerReserve(layer))
   let table = '';
   let totalReserves = 0;
@@ -921,7 +887,6 @@ async function loadDashboardData() {
   }
   document.getElementById('layer-table').innerHTML = table;
   document.getElementById('avg-reserves').textContent = (totalReserves / LAYERS).toLocaleString() + ' TVM';
-
   // Charts (Updated with Chart.js v4)
   new Chart(document.getElementById('pool-chart'), {
     type: 'doughnut',
@@ -934,5 +899,4 @@ async function loadDashboardData() {
     options: { responsive: true, scales: { y: { beginAtZero: true } } }
   });
 }
-
 init();
