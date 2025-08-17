@@ -9,6 +9,7 @@
  * Fixed: Enter vault passphrase prompt, connect wallet functionality (MetaMask/WalletConnect).
  * Added: P2P segments transfer (Catch In/Out) with micro-ledger per segment (10 history events), ZKP for biometric human validation, validation on receive, update balance/transaction history.
  ******************************/
+
 // Base Setup / Global Constants (From main.js, Updated for 2025 Standards)
 const DB_NAME = 'BioVaultDB';
 const DB_VERSION = 2;
@@ -111,6 +112,7 @@ const VAULT_BACKUP_KEY = 'vaultArmoredBackup';
 const STORAGE_CHECK_INTERVAL = 300000;
 const vaultSyncChannel = new BroadcastChannel('vault-sync');
 const WALLET_CONNECT_PROJECT_ID = 'your_project_id_here'; // Replace with actual WalletConnect Project ID for production
+
 // State (Integrated Vault Data)
 let vaultUnlocked = false;
 let derivedKey = null;
@@ -129,6 +131,7 @@ let autoSignature = '';
 let autoExchangeAmount = 0;
 let autoSwapAmount = 0;
 let autoSwapUSDTAmount = 0;
+
 let vaultData = {
   bioIBAN: null,
   initialBioConstant: INITIAL_BIO_CONSTANT,
@@ -146,7 +149,9 @@ let vaultData = {
   deviceKeyHash: "",
   layerBalances: Array.from({length: LAYERS}, () => 0)
 };
+
 vaultData.layerBalances[0] = INITIAL_BALANCE_SHE;
+
 // Utils Module (Full from main.js)
 const Utils = {
   enc: new TextEncoder(),
@@ -176,6 +181,7 @@ const Utils = {
   },
   sanitizeInput: (input) => DOMPurify.sanitize(input)
 };
+
 // Encryption Module
 const Encryption = {
   encryptData: async (key, dataObj) => {
@@ -191,50 +197,26 @@ const Encryption = {
   bufferToBase64: (buf) => Utils.toB64(buf),
   base64ToBuffer: (b64) => Utils.fromB64(b64)
 };
+
 // DB Module (Added SEGMENTS_STORE)
 const DB = {
   openVaultDB: async () => {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME); // Open at current version
-      req.onsuccess = (evt) => {
+      let req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = (evt) => {
         let db = evt.target.result;
-        const needsUpgrade = !db.objectStoreNames.contains(VAULT_STORE) ||
-                             !db.objectStoreNames.contains(PROOFS_STORE) ||
-                             !db.objectStoreNames.contains(SEGMENTS_STORE);
-        if (needsUpgrade) {
-          const currentVersion = db.version;
-          db.close();
-          const upgradeReq = indexedDB.open(DB_NAME, currentVersion + 1);
-          upgradeReq.onupgradeneeded = (upgradeEvt) => {
-            db = upgradeEvt.target.result;
-            if (!db.objectStoreNames.contains(VAULT_STORE)) {
-              db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
-            }
-            if (!db.objectStoreNames.contains(PROOFS_STORE)) {
-              db.createObjectStore(PROOFS_STORE, { keyPath: 'id' });
-            }
-            if (!db.objectStoreNames.contains(SEGMENTS_STORE)) {
-              db.createObjectStore(SEGMENTS_STORE, { keyPath: 'segmentIndex' });
-            }
-          };
-          upgradeReq.onsuccess = (upgradeEvt) => resolve(upgradeEvt.target.result);
-          upgradeReq.onerror = (err) => reject(err.target.error);
-        } else {
-          resolve(db);
+        if (!db.objectStoreNames.contains(VAULT_STORE)) {
+          db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(PROOFS_STORE)) {
+          db.createObjectStore(PROOFS_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(SEGMENTS_STORE)) {
+          db.createObjectStore(SEGMENTS_STORE, { keyPath: 'segmentIndex' });
         }
       };
-      req.onerror = (evt) => {
-        // DB does not exist, create it
-        const createReq = indexedDB.open(DB_NAME, DB_VERSION);
-        createReq.onupgradeneeded = (createEvt) => {
-          const db = createEvt.target.result;
-          db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
-          db.createObjectStore(PROOFS_STORE, { keyPath: 'id' });
-          db.createObjectStore(SEGMENTS_STORE, { keyPath: 'segmentIndex' });
-        };
-        createReq.onsuccess = (createEvt) => resolve(createEvt.target.result);
-        createReq.onerror = (err) => reject(err.target.error);
-      };
+      req.onsuccess = (evt) => resolve(evt.target.result);
+      req.onerror = (evt) => reject(evt.target.error);
     });
   },
   saveVaultDataToDB: async (iv, ciphertext, saltBase64) => {
@@ -328,6 +310,7 @@ const DB = {
     });
   }
 };
+
 // Biometric Module (WebAuthn for 2025 Compliance, with broader alg support)
 const Biometric = {
   performBiometricAuthenticationForCreation: async () => {
@@ -379,6 +362,7 @@ const Biometric = {
     return null;
   }
 };
+
 // Vault Module
 const Vault = {
   deriveKeyFromPIN: async (pin, salt) => {
@@ -426,6 +410,7 @@ const Vault = {
     Vault.updateVaultUI();
   }
 };
+
 // Wallet Module (MetaMask + WalletConnect v2 for 2025, with button enabling)
 const Wallet = {
   connectMetaMask: async () => {
@@ -488,6 +473,7 @@ const Wallet = {
     }
   }
 };
+
 // Proofs Module (For Claim Signing and Auto-Generation)
 const Proofs = {
   generateAutoProof: async () => {
@@ -535,6 +521,7 @@ const Proofs = {
     return signature;
   }
 };
+
 // UI Module (Extended for Dashboard)
 const UI = {
   showAlert: (msg) => alert(msg),
@@ -545,6 +532,7 @@ const UI = {
     document.getElementById('wallet-address').textContent = account ? `Connected: ${account.slice(0,6)}...${account.slice(-4)}` : '';
   }
 };
+
 // Contract Interactions (Auto from Proofs, Buttons Only)
 const ContractInteractions = {
   claimTVM: async () => {
@@ -620,27 +608,26 @@ const ContractInteractions = {
     }
   }
 };
+
 // Segment Module (Micro-Ledger per Segment)
 const Segment = {
   initializeSegments: async () => {
-    const existingSegments = await DB.loadSegmentsFromDB();
-    if (existingSegments.length >= INITIAL_BALANCE_SHE) return;
+    const segments = [];
     for (let i = 1; i <= INITIAL_BALANCE_SHE; i++) {
-      if (!existingSegments.some(s => s.segmentIndex === i)) {
-        const segment = {
-          segmentIndex: i,
-          currentOwner: vaultData.bioIBAN,
-          history: [{
-            event: 'Initialization',
-            timestamp: Date.now(),
-            from: 'Genesis',
-            to: vaultData.bioIBAN,
-            bioConst: GENESIS_BIO_CONSTANT + i,
-            integrityHash: await Utils.sha256Hex('init' + i + vaultData.bioIBAN)
-          }]
-        };
-        await DB.saveSegmentToDB(segment);
-      }
+      const segment = {
+        segmentIndex: i,
+        currentOwner: vaultData.bioIBAN,
+        history: [{
+          event: 'Initialization',
+          timestamp: Date.now(),
+          from: 'Genesis',
+          to: vaultData.bioIBAN,
+          bioConst: GENESIS_BIO_CONSTANT + i,
+          integrityHash: await Utils.sha256Hex('init' + i + vaultData.bioIBAN)
+        }]
+      };
+      segments.push(segment);
+      await DB.saveSegmentToDB(segment);
     }
     vaultData.balanceSHE = INITIAL_BALANCE_SHE;
   },
@@ -669,6 +656,7 @@ const Segment = {
     return true;
   }
 };
+
 // P2P Module (Catch In/Out - NFC/WebRTC for Offline, with Micro-Ledger and ZKP)
 const P2P = {
   handleCatchOut: async () => {
@@ -748,6 +736,7 @@ const P2P = {
     }
   }
 };
+
 // Notifications Module
 const Notifications = {
   requestPermission: () => {
@@ -761,6 +750,7 @@ const Notifications = {
     }
   }
 };
+
 // Backup/Export Functions
 function exportTransactions() {
   const blob = new Blob([JSON.stringify(vaultData.transactions)], { type: 'application/json' });
@@ -770,6 +760,7 @@ function exportTransactions() {
   a.download = 'transactions.json';
   a.click();
 }
+
 function backupVault() {
   const backup = JSON.stringify(vaultData);
   const blob = new Blob([backup], { type: 'application/json' });
@@ -779,10 +770,12 @@ function backupVault() {
   a.download = 'vault.backup';
   a.click();
 }
+
 function exportFriendlyBackup() {
   // Armored or encrypted backup
   alert('Exporting friendly backup...');
 }
+
 function importVault() {
   const file = document.getElementById('importVaultInput').files[0];
   if (file) {
@@ -795,24 +788,29 @@ function importVault() {
     reader.readAsText(file);
   }
 }
+
 function copyToClipboard(id) {
   const text = document.getElementById(id).textContent;
   navigator.clipboard.writeText(text).then(() => UI.showAlert('Copied!'));
 }
+
 // Export Proof to Blockchain (Auto-Load into Dashboard)
 function exportProofToBlockchain() {
   showSection('dashboard');
   Proofs.loadAutoProof();
   UI.showAlert('Proof auto-exported to dashboard actions.');
 }
+
 // Section Switching
 function showSection(id) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active-section'));
   document.getElementById(id).classList.add('active-section');
   if (id === 'dashboard') loadDashboardData();
 }
+
 // Theme Toggle
 document.getElementById('theme-toggle').addEventListener('click', () => document.body.classList.toggle('dark-mode'));
+
 // Enable Dashboard Buttons after Connection
 function enableDashboardButtons() {
   document.getElementById('claim-tvm-btn').disabled = false;
@@ -820,44 +818,37 @@ function enableDashboardButtons() {
   document.getElementById('swap-tvm-usdt-btn').disabled = false;
   document.getElementById('swap-usdt-tvm-btn').disabled = false;
 }
+
 // PWA Service Worker Registration
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => console.log('Service Worker Registered')).catch(err => console.error('Registration failed', err));
 }
+
 // Init Function (Full from main.js, Integrated)
 async function init() {
   Notifications.requestPermission();
   P2P.handleNfcRead(); // Start NFC if supported
-  let stored;
-  try {
-    stored = await DB.loadVaultDataFromDB();
-  } catch (e) {
-    console.error('Error loading vault data:', e);
-    stored = null;
-  }
+
+  const stored = await DB.loadVaultDataFromDB();
   if (stored) {
     vaultData.authAttempts = stored.authAttempts;
     vaultData.lockoutTimestamp = stored.lockoutTimestamp;
   } else {
-    try {
-      const credential = await Biometric.performBiometricAuthenticationForCreation();
-      if (credential) {
-        vaultData.credentialId = Encryption.bufferToBase64(credential.rawId);
-        vaultData.bioIBAN = await Utils.sha256Hex(Math.random().toString());
-        vaultData.joinTimestamp = Date.now();
-        vaultData.deviceKeyHash = await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32)));
-        vaultData.balanceSHE = INITIAL_BALANCE_SHE;
-        const salt = Utils.rand(16);
-        const pin = prompt("Set passphrase:");
-        derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), salt);
-        await Vault.promptAndSaveVault(salt);
-        await Segment.initializeSegments(); // Init segments on creation
-      }
-    } catch (e) {
-      console.error('Error during vault creation:', e);
-      // Continue execution even if creation fails partially
+    const credential = await Biometric.performBiometricAuthenticationForCreation();
+    if (credential) {
+      vaultData.credentialId = Encryption.bufferToBase64(credential.rawId);
+      vaultData.bioIBAN = await Utils.sha256Hex(Math.random().toString());
+      vaultData.joinTimestamp = Date.now();
+      vaultData.deviceKeyHash = await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32)));
+      vaultData.balanceSHE = INITIAL_BALANCE_SHE;
+      const salt = Utils.rand(16);
+      const pin = prompt("Set passphrase:");
+      derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), salt);
+      await Vault.promptAndSaveVault(salt);
+      await Segment.initializeSegments(); // Init segments on creation
     }
   }
+
   // Event Listeners
   document.getElementById('connectMetaMaskBtn').addEventListener('click', Wallet.connectMetaMask);
   document.getElementById('connectWalletConnectBtn').addEventListener('click', Wallet.connectWalletConnect);
@@ -867,31 +858,15 @@ async function init() {
       return;
     }
     const pin = prompt("Enter passphrase:");
-    let stored;
-    try {
-      stored = await DB.loadVaultDataFromDB();
-    } catch (e) {
-      console.error('Error loading vault data for unlock:', e);
-      UI.showAlert("Error accessing vault.");
-      return;
-    }
+    const stored = await DB.loadVaultDataFromDB();
     if (stored) {
+      derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
       try {
-        derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
         vaultData = await Encryption.decryptData(derivedKey, stored.iv, stored.ciphertext);
         if (await Biometric.performBiometricAssertion(vaultData.credentialId)) {
           vaultUnlocked = true;
           document.getElementById('lockedScreen').classList.add('hidden');
           document.getElementById('vaultUI').classList.remove('hidden');
-          // Check and initialize segments if missing
-          const segments = await DB.loadSegmentsFromDB();
-          if (segments.length < INITIAL_BALANCE_SHE) {
-            try {
-              await Segment.initializeSegments();
-            } catch (e) {
-              console.error('Error initializing missing segments:', e);
-            }
-          }
           await Vault.updateBalanceFromSegments(); // Update balance from segments
           Vault.updateVaultUI();
           await Proofs.generateAutoProof(); // Auto-generate proofs on unlock for dashboard
@@ -904,8 +879,7 @@ async function init() {
           UI.showAlert("Biometric failed.");
         }
       } catch (err) {
-        console.error('Unlock error:', err);
-        UI.showAlert("Invalid passphrase or decryption failed.");
+        UI.showAlert("Invalid passphrase.");
       }
     }
   });
@@ -917,20 +891,25 @@ async function init() {
   document.getElementById('swap-tvm-usdt-btn').addEventListener('click', ContractInteractions.swapTVMForUSDT);
   document.getElementById('swap-usdt-tvm-btn').addEventListener('click', ContractInteractions.swapUSDTForTVM);
   document.getElementById('connect-wallet').addEventListener('click', Wallet.connectMetaMask); // Default to MetaMask, or add dropdown
+
   // Idle Timeout
   setTimeout(Vault.lockVault, MAX_IDLE);
+
   // UTC Time Update
   setInterval(() => {
     document.getElementById('utcTime').textContent = new Date().toUTCString();
   }, 1000);
+
   // Load Dashboard on Init if Needed
   loadDashboardData();
 }
+
 // Load Dashboard Data (Real Contract Calls + Charts)
 async function loadDashboardData() {
   if (!tvmContract) return;
   // Update Balances
   await Wallet.updateBalances();
+
   // Layer Table (Mock/Real - Assume contract has getLayerReserve(layer))
   let table = '';
   let totalReserves = 0;
@@ -942,6 +921,7 @@ async function loadDashboardData() {
   }
   document.getElementById('layer-table').innerHTML = table;
   document.getElementById('avg-reserves').textContent = (totalReserves / LAYERS).toLocaleString() + ' TVM';
+
   // Charts (Updated with Chart.js v4)
   new Chart(document.getElementById('pool-chart'), {
     type: 'doughnut',
@@ -954,4 +934,5 @@ async function loadDashboardData() {
     options: { responsive: true, scales: { y: { beginAtZero: true } } }
   });
 }
+
 init();
