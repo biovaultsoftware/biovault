@@ -1,349 +1,241 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Bio‑Vault | P2P UTC Ledger</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <!-- Optional: PWA Manifest & Service Worker -->
-  <!-- Removed icon path from manifest or point it to a valid image -->
-  <link rel="manifest" href="./manifest.json">
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js')
-          .then(reg => console.log('Service Worker registered:', reg.scope))
-          .catch(err => console.error('Service Worker registration failed:', err));
-      });
-    }
-  </script>
-
-  <!-- Ethers.js (UMD build) => ensures global 'ethers' is defined -->
-  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
-
-  <!-- Basic styling -->
-  <style>
-    /* Body & General */
-    body {
-      background: linear-gradient(to left, #2f4979, #15264d);
-      color: #fff;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      margin: 0;
-      padding: 20px;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-    }
-    h1, h2, h3 {
-      margin: 10px 0;
-    }
-    .hidden {
-      display: none;
-    }
-
-    /* Buttons */
-    button {
-      background: #2258c4;
-      color: #fff;
-      padding: 10px 20px;
-      border: none;
-      border-radius: 5px;
-      font-size: 16px;
-      margin: 5px;
-      cursor: pointer;
-      transition: background 0.3s ease;
-    }
-    button:hover {
-      background: #144180;
-    }
-
-    /* Locked Screen */
-    #lockedScreen {
-      margin-top: 50px;
-    }
-    #lockedScreen #enterVaultBtn {
-      margin-top: 20px;
-    }
-
-    /* Main Vault UI */
-    #vaultUI {
-      max-width: 900px;
-      width: 100%;
-      margin-top: 20px;
-    }
-    .section {
-      margin: 20px auto;
-      max-width: 800px;
-      width: 85%;
-    }
-    .input-field {
-      padding: 10px;
-      margin: 10px 5px;
-      border: none;
-      border-radius: 4px;
-      width: 45%;
-      max-width: 300px;
-      font-size: 16px;
-    }
-
-    /* Transaction Table */
-    #transactionTable {
-      width: 100%;
-      border-collapse: collapse;
-      background: #fff;
-      color: #000;
-      margin-top: 20px;
-      border-radius: 5px;
-      overflow: hidden;
-    }
-    #transactionTable th, #transactionTable td {
-      padding: 10px;
-      border-bottom: 1px solid #ccc;
-      word-wrap: break-word;
-    }
-    #transactionTable th {
-      background: #f3f4f6;
-    }
-
-    /* BioLine + UTC Container */
-    #bioLineUTCContainer {
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-      background-color: rgba(255, 255, 255, 0.1);
-      padding: 15px 30px;
-      border-radius: 10px;
-      font-size: 18px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-    }
-
-    /* Catch In / Out Sections */
-    #catchInSection, #catchOutSection {
-      background-color: rgba(255,255,255,0.1);
-      padding: 20px;
-      border-radius: 10px;
-      margin: 20px auto;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-      max-width: 600px;
-    }
-    #catchInBtn {
-      background: #10b981;
-    }
-    #catchInBtn:hover {
-      background: #059669;
-    }
-    #catchOutBtn {
-      background: #f97316;
-    }
-    #catchOutBtn:hover {
-      background: #ea580c;
-    }
-
-    /* Popup (Bio‑Catch) */
-    .popup {
-      background-color: rgba(0,0,0,0.8);
-      position: fixed;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      display: none;
-      justify-content: center;
-      align-items: center;
-      z-index: 9999;
-    }
-    .popup-content {
-      background: #fff;
-      color: #000;
-      padding: 20px;
-      border-radius: 8px;
-      text-align: center;
-      max-width: 400px;
-      width: 80%;
-    }
-
-    /* Passphrase Modal */
-    #passModal {
-      display: none;
-      position: fixed;
-      z-index: 99999;
-      top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.6);
-      justify-content: center;
-      align-items: center;
-    }
-    #passModal .popup-content {
-      background: #fff; color: #000;
-      padding: 20px; border-radius: 8px;
-      text-align: center; max-width: 400px;
-      width: 80%; margin:80px auto; position:relative;
-    }
-
-    /* Lock Vault Button */
-    #lockVaultBtn {
-      position: absolute;
-      top: 20px;
-      right: 20px;
-    }
-
-    /* Extra: Terminate Vault (optional) */
-    #terminateBtn {
-      background: #ef4444;
-      font-size: 14px;
-      border-radius: 5px;
-      display: none;
-    }
-    #terminateBtn:hover {
-      background: #dc2626;
-    }
-
-    /* Footer, etc. */
-    #footer {
-      margin-top: 20px;
-    }
-
-    /* Responsive Tweaks */
-    @media (max-width: 768px) {
-      #transactionTable th:nth-child(2),
-      #transactionTable td:nth-child(2) {
-        max-width: 60px;
-        word-wrap: break-word;
-      }
-      .input-field {
-        width: 70%;
-      }
-      #bioLineUTCContainer {
-        width: 80%;
-        flex-direction: column;
-      }
-    }
-    @media (max-width: 480px) {
-      #transactionTable {
-        font-size: 12px;
-      }
-      button {
-        padding: 8px 16px;
-        font-size: 14px;
-      }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate TVM Ecosystem Dashboard - Balance Chain & Blockchain</title>
+    <!-- Bootstrap CSS for Responsive Layout -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Chart.js for Visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <!-- Ethers.js for Blockchain Interactions (updated to latest as of 2025) -->
+    <script src="https://cdn.ethers.io/lib/ethers-6.13.1.umd.min.js"></script>
+    <!-- Font Awesome for Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" rel="stylesheet">
+    <!-- DOMPurify for Sanitization -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+    <!-- PWA Manifest (updated with real icons) -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#007bff">
+    <style>
+        body { font-family: 'Roboto', sans-serif; background: linear-gradient(135deg, #0f0c29, #302b63, #24243e); color: #ffffff; transition: background 0.3s; }
+        .dark-mode { background: linear-gradient(135deg, #121212, #1e1e1e, #333); }
+        .card { background: rgba(255,255,255,0.05); border: none; border-radius: 20px; backdrop-filter: blur(15px); box-shadow: 0 8px 32px rgba(0,0,0,0.37); transition: transform 0.3s ease; }
+        .card:hover { transform: scale(1.02); }
+        .btn-primary { background: linear-gradient(90deg, #007bff, #00c6ff); border: none; border-radius: 50px; font-weight: bold; }
+        .btn-primary:hover { background: linear-gradient(90deg, #00c6ff, #007bff); }
+        .section { display: none; padding: 50px 0; animation: fadeIn 0.8s ease-in; }
+        .active-section { display: block; }
+        .landing { text-align: center; padding: 25vh 0; }
+        .whitepaper { background: rgba(0,0,0,0.6); padding: 25px; border-radius: 15px; margin-bottom: 30px; }
+        .chart-container { height: 350px; background: rgba(255,255,255,0.1); border-radius: 15px; padding: 15px; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.5s ease; }
+        /* Crypto-Inspired Design: Neon Accents */
+        .neon-text { text-shadow: 0 0 5px #007bff, 0 0 10px #007bff; }
+        .back-btn { border-radius: 50px; margin-top: 20px; }
+        #lockedScreen { display: block; text-align: center; padding-top: 20vh; }
+        #vaultUI { display: none; }
+        .hidden { display: none; }
+        table { width: 100%; }
+    </style>
 </head>
-
 <body>
-  <!-- Locked Screen -->
-  <div id="lockedScreen">
-    <h1>Bio‑Vault</h1>
-    <h2>WELCOME TO YOUR VAULT<br>WHERE THE TRUE VALUE OF MONEY IS.</h2>
-    <button id="enterVaultBtn">Enter Vault</button>
-  </div>
-
-  <!-- Passphrase Modal -->
-  <div id="passModal">
-    <div class="popup-content">
-      <h3 id="passModalTitle">Enter Passphrase</h3>
-      <label id="passModalConfirmLabel" for="passModalConfirmInput">Confirm Passphrase:</label><br>
-      <input type="password" id="passModalInput" placeholder="Enter passphrase"><br>
-      <input type="password" id="passModalConfirmInput" placeholder="Confirm passphrase"><br>
-      <button id="passModalCancelBtn">Cancel</button>
-      <button id="passModalSaveBtn">Save</button>
-    </div>
-  </div>
-
-  <!-- Lock / Terminate Vault -->
-  <button id="lockVaultBtn" class="hidden">Lock Vault</button>
-  <button id="terminateBtn" class="hidden">Terminate Vault</button>
-
-  <!-- Main Vault UI -->
-  <div id="vaultUI" class="hidden">
-    <!-- Bio-IBAN & Copy -->
-    <div class="section">
-      <label for="bioibanInput">Your Bio‑IBAN:</label><br>
-      <input type="text" id="bioibanInput" class="input-field" placeholder="BIO..." readonly>
-      <button id="copyBioIBANBtn">Copy</button>
-    </div>
-
-    <!-- Balances -->
-    <div class="section" id="balanceContainer">
-      <span id="tvmBalance">Balance: 0 TVM</span><br>
-      <span id="usdBalance">Equivalent to 0 USD</span>
-    </div>
-
-    <!-- Bio-Line + UTC  -->
-    <div class="section" id="bioLineUTCContainer">
-      <div id="bioLineText">🔄 BonusConstant: 0</div>
-      <div id="utcTime">UTC Time: ...</div>
-    </div>
-
-    <!-- On-Chain Wallet Field -->
-    <div class="section">
-      <label>On‑Chain Wallet Address:</label><br>
-      <input type="text" id="userWalletAddress" class="input-field" placeholder="0xYourWallet...">
-      <button id="saveWalletBtn">Save Wallet</button>
-      <button id="autoConnectWalletBtn">Auto‑Connect MetaMask</button>
-    </div>
-
-    <!-- Catch In -->
-    <div class="section" id="catchInSection">
-      <input type="text" id="catchInBioCatch" class="input-field" placeholder="Paste Bio‑Catch #">
-      <input type="number" id="catchInAmount" class="input-field" placeholder="Amount (TVM)">
-      <button id="catchInBtn">Catch In</button>
-    </div>
-
-    <!-- Catch Out -->
-    <div class="section" id="catchOutSection">
-      <input type="text" id="receiverBioIBAN" class="input-field" placeholder="Receiver Bio‑IBAN">
-      <input type="number" id="catchOutAmount" class="input-field" placeholder="Amount (TVM)">
-      <button id="catchOutBtn">Catch Out</button>
-    </div>
-
-    <!-- Transactions -->
-    <h3>Transaction History</h3>
-    <div class="section">
-      <button id="exportBtn">Export Transactions</button>
-      <button id="exportBackupBtn">Backup Vault</button>
-      <!-- Example: For the user-friendly .vault backup -->
-      <button id="exportFriendlyBtn">Export Friendly Backup</button>
-      <br>
-      <label>Import .vault:</label>
-      <input type="file" id="importVaultFileInput" accept=".vault">
-    </div>
-    <table id="transactionTable">
-      <thead>
-        <tr>
-          <th>Bio‑IBAN</th>
-          <th>Bio‑Catch</th>
-          <th>Amount (TVM)</th>
-          <th>Date/Time</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody id="transactionBody"></tbody>
-    </table>
-
-    <!-- Info on Exchange Rate or P2P details -->
-    <div class="section" id="p2pInfo">
-      <span>(Exchange Rate: 1 USD = 12 TVM)</span>
-    </div>
-  </div>
-
-  <!-- Popup for newly generated Bio‑Catch -->
-  <div id="bioCatchPopup" class="popup" aria-modal="true" role="dialog">
-    <div class="popup-content">
-      <h3>Your Bio‑Catch Number</h3>
-      <p id="bioCatchNumberText"></p>
-      <button id="copyBioCatchBtn">Copy Bio‑Catch</button>
-      <button id="closeBioCatchPopup">Close</button>
-    </div>
-  </div>
-
-  <!-- Footer -->
-  <div class="section" id="footer">
-    <p style="color:#fff;">By RR.R — for Humanity</p>
-  </div>
-
-  <!-- main.js script (Vault + On‑Chain stub) -->
-  <script type="module" src="main.js"></script>
-
+    <!-- Global Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-transparent fixed-top">
+        <div class="container">
+            <a class="navbar-brand neon-text" href="#">TVM Ecosystem</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('landing')">Home</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('biovault')">BioVault (MSL)</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('scl')">SCL Overview</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('dashboard')">Dashboard</a></li>
+                    <li class="nav-item"><button id="theme-toggle" class="btn btn-outline-light ms-2">Dark Mode</button></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    <!-- Landing Page Section -->
+    <section id="landing" class="section landing active-section fade-in">
+        <div class="container">
+            <h1 class="display-3 neon-text">True Value of Money (TVM) Ecosystem</h1>
+            <p class="lead">As of August 16, 2025 – Enter the Offchain or Onchain World. BalanceChain: Superior to Blockchain, SWIFT, and Fiat – Instant, Offline-Capable, Zero-Fee P2P Transfers with SHE/ECF Framework and TVM Gateway.</p>
+            <div class="row justify-content-center mt-5">
+                <div class="col-md-4">
+                    <button class="btn btn-primary btn-lg w-100 mb-4" onclick="showSection('biovault')"><i class="fas fa-lock me-2"></i> Enter Decentralized MSL (P2P BioVault PWA)</button>
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-primary btn-lg w-100 mb-4" onclick="showSection('scl')"><i class="fas fa-bank me-2"></i> Enter Centralized SCL (CBDC-Fiat Twin)</button>
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-primary btn-lg w-100 mb-4" onclick="showSection('dashboard')"><i class="fas fa-chain me-2"></i> Enter Blockchain (TVM Token Gateway)</button>
+                </div>
+            </div>
+        </div>
+    </section>
+    <!-- BioVault PWA Section (Decentralized MSL - Offchain) -->
+    <section id="biovault" class="section container fade-in">
+        <h2 class="neon-text">BioVault PWA - Decentralized MSL (Micro Segments Ledger)</h2>
+        <p class="lead">No authority, complete immutability and security. Manage SHE segments, generate proofs, and perform offline P2P transfers. Gateway to TVM blockchain for swaps and crypto entry.</p>
+        <!-- White Paper (Updated with Dynamic Pricing, Fixed 12 SHE/TVM, No USD Peg Mention) -->
+        <div class="whitepaper">
+            <h3>BalanceChain White Paper</h3>
+            <p><strong>Abstract:</strong> BalanceChain is a revolutionary SHE-powered microledger protocol that humanizes money by grounding its value in Standard Human Effort (SHE), a standardized measure of labor akin to horsepower for engines, derived from 100-year global economic data (average GDP/capita ~$10,000/year, 2000 work hours = $5/hour baseline, 1 hour = 60 SHE units, e.g., moving 100 bricks). SHE equalizes effort across borders, addressing disparities, while the Efficiency Correction Factor (ECF = Country GDP/capita ÷ Global average $10,000) adjusts for productivity variances (e.g., USA ECF=8 at $80,000 = $40/hour; India ECF=0.25 at $2,500 = $1.25/hour), serving as a diagnostic tool to fix imbalances through policies like improved education and infrastructure.</p>
+            <p>The protocol introduces True Value of Money (TVM), with dynamic pricing as defined in the smart contract, fixed at 12 SHE units per TVM (adjustable based on global economic growth by changing TVM price while keeping 12 SHE fixed). TVM is not a new currency but a complement that infuses intrinsic effort-based value into fiat and crypto, defining money's true worth as standardized human effort—specifically transacting, the only mutual economic activity all humans share, with offline capabilities removing differences. A 51% Human Investment (HI) / 49% AI rule ensures at least 51% of economic output remains human-driven (effort, creativity, ethics), capping AI at 49% to prevent dominance, job loss, or gaps; excess growth (e.g., from AI boosting GDP) splits 51% to humans via UBI-like Bio-Balance (60,000 SHE units/vault ~$5,000 start, covering 40-50% essentials like food/shelter/health) and shorter workweeks, while 49% fuels tech—promoting fair gains, productivity, and cooperation over resource conflicts (e.g., oil worthless without effort, lessons from COVID unity).</p>
+            <p>As a hybrid offchain-onchain system, BalanceChain uses a personal tamper-proof microledger (local IndexedDB, AES-GCM encrypted, WebAuthn biometrics like Face ID/fingerprint—COVID-proven, user-friendly) for offchain segment management (12,000 segments/year as SHE units, initial 1,200 unlocked in Layer 0) and onchain TVM issuance (1,000 TVM/year, 0 initial unlocked). Deterministic 10-layer chaining (1200 segments/layer; Segment N in Layer L unlocks N in L+1) enables cascading unlocks with time-based security (bio-constants from genesis 1736565605 + increments, strictly increasing with ±60s tolerance, preventing fraud/replay/backdating). Hierarchical caps control release (daily 360 segments/30 TVM, monthly 3600/300, yearly 10800/900; 5-year max 60,000 segments/5,000 TVM, halt/reset afterward). Offchain proofs (ownership with spent proof: org/prev match, curr differs; bio-integrity) submitted onchain mint TVM (12 segments = 1 TVM, extra 100 at yearly cap for parity), linking device key hash to wallet.</p>
+            <a href="#" class="btn btn-secondary w-100" onclick="alert('Downloading full whitepaper PDF...')"><i class="fas fa-download me-2"></i> Download Full White Paper</a>
+        </div>
+        <!-- Integrated Vault UI from Previous -->
+        <div id="lockedScreen">
+            <h3>Locked Vault</h3>
+            <button id="enterVaultBtn" class="btn btn-primary btn-lg w-100 mb-4"><i class="fas fa-unlock me-2"></i> Enter Vault</button>
+        </div>
+        <div id="vaultUI" class="hidden">
+            <p>Your Bio-IBAN: <span id="bioIBAN"></span> <button onclick="copyToClipboard('bioIBAN')">Copy</button></p>
+            <p>Balance: <span id="balanceSHE"></span> SHE (<span id="balanceTVM"></span> TVM)</p>
+            <p>Equivalent to <span id="balanceUSD"></span> USD</p>
+            <p>Bonus Constant: <span id="bonusConstant"></span></p>
+            <p>UTC Time: <span id="utcTime"></span></p>
+            <p>On-Chain Wallet Address: <span id="connectedAccount">Not connected</span></p>
+            <button id="saveWalletBtn" class="btn btn-primary">Save Wallet</button>
+            <button id="connectMetaMaskBtn" class="btn btn-warning">Connect MetaMask</button>
+            <button id="connectWalletConnectBtn" class="btn btn-warning">Connect WalletConnect</button>
+            <button id="catchInBtn" class="btn btn-success">Catch In</button>
+            <button id="catchOutBtn" class="btn btn-success">Catch Out</button>
+            <h4>Transaction History</h4>
+            <table class="table table-dark">
+                <thead><tr><th>Bio-IBAN</th><th>Bio-Catch</th><th>Amount (TVM)</th><th>Date/Time</th><th>Status</th></tr></thead>
+                <tbody id="transactionHistory"></tbody>
+            </table>
+            <button onclick="exportTransactions()">Export Transactions</button>
+            <button onclick="backupVault()">Backup Vault</button>
+            <button onclick="exportFriendlyBackup()">Export Friendly Backup</button>
+            <input type="file" id="importVaultInput" accept=".vault">
+            <button onclick="importVault()">Import .vault</button>
+            <button id="lockVaultBtn" class="btn btn-danger">Lock Vault</button>
+            <button id="terminateVaultBtn" class="btn btn-danger">Terminate Vault</button>
+        </div>
+        <!-- Export to Blockchain -->
+        <button class="btn btn-info btn-lg w-100 mt-4" onclick="exportProofToBlockchain()"><i class="fas fa-upload me-2"></i> Export Proof to Blockchain Dashboard</button>
+        <button class="btn btn-outline-light back-btn w-100" onclick="showSection('landing')"><i class="fas fa-arrow-left me-2"></i> Back</button>
+    </section>
+    <!-- Centralized SCL Overview Section -->
+    <section id="scl" class="section container fade-in">
+        <h2 class="neon-text">Centralized SCL (Serial Centric Ledger) Overview</h2>
+        <p class="lead">For central banks, banks, money transfer companies, and centralized entities. Enables CBDC-fiat twins with full traceability, instant/offline zero-fee transfers for any currency (e.g., USD, Euro, Riyal). This PWA provides a demo/simulation; full implementation requires server-side integration.</p>
+        <div class="whitepaper">
+            <h3>SCL Key Features</h3>
+            <ul>
+                <li>Serial-Centric Ledger: Tracks every unit (cash/digital) by serial, denomination, events, and ownership chain.</li>
+                <li>CBDC-Fiat Twins: Seamless switch between physical cash and digital, fully synced and auditable for any currency.</li>
+                <li>Full Traceability: Instant tracing, anti-laundering, anti-theft, anti-robbery. Flags stolen/forced transfers in real-time.</li>
+                <li>Regulator-Owned: No blockchain risks, central control with offline capabilities and zero fees.</li>
+                <li>Integration: Software upgrades for ATMs/banks; no disruption to users.</li>
+                <li>Superiority: Unlimited scalability, proactive crime prevention, meets global AML standards.</li>
+            </ul>
+            <p>Example Use Case: For any currency (e.g., USD, Euro, Riyal), BalanceChain SCL makes every unit traceable—cash or digital—preventing crime and enabling smooth CBDC transition.</p>
+            <a href="#" class="btn btn-secondary w-100" onclick="alert('Contact for full SCL implementation details.')"><i class="fas fa-info-circle me-2"></i> Request SCL Demo</a>
+        </div>
+        <button class="btn btn-outline-light back-btn w-100" onclick="showSection('landing')"><i class="fas fa-arrow-left me-2"></i> Back</button>
+    </section>
+    <!-- Blockchain Dashboard Section (Onchain - TVM Gateway, Buttons Only with Auto-Forms from BalanceChain) -->
+    <section id="dashboard" class="section container fade-in">
+        <h2 class="neon-text">TVM Blockchain Dashboard (Gateway to DLT)</h2>
+        <p class="lead">Connect your wallet and interact with the TVM contract for claims, swaps, and exchanges. Pegged at 12 SHE per TVM with dynamic pricing. Serves as gateway for both MSL and SCL versions. Actions auto-populate from BalanceChain proofs for seamless UX—just click buttons.</p>
+        <button id="connect-wallet" class="btn btn-warning btn-lg w-100 mb-4"><i class="fas fa-wallet me-2"></i> Connect Wallet</button>
+        <p id="wallet-address" class="text-center"></p>
+        <!-- Overview Metrics -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5>TVM Price (in USDT)</h5>
+                        <p id="tvm-price">Loading...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5>Your TVM Balance</h5>
+                        <p id="user-balance">Loading...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5>Your USDT Balance</h5>
+                        <p id="usdt-balance">Loading...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5>HI/AI Pool Ratio (51%/49%)</h5>
+                        <p id="pool-ratio">Loading...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5>Avg Layer Reserves</h5>
+                        <p id="avg-reserves">Loading...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Action Buttons (No Forms; Auto-Populate from BalanceChain Proofs; Disabled until Connected) -->
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <button id="claim-tvm-btn" class="btn btn-success btn-lg w-100" disabled><i class="fas fa-claim me-2"></i> Claim TVM (Auto from Proofs)</button>
+                <div id="claim-loading" class="hidden">Loading...</div>
+            </div>
+            <div class="col-md-6 mb-3">
+                <button id="exchange-tvm-btn" class="btn btn-warning btn-lg w-100" disabled><i class="fas fa-unlock me-2"></i> Exchange TVM for Segments (Auto)</button>
+                <div id="exchange-loading" class="hidden">Loading...</div>
+            </div>
+            <div class="col-md-6 mb-3">
+                <button id="swap-tvm-usdt-btn" class="btn btn-info btn-lg w-100" disabled><i class="fas fa-exchange-alt me-2"></i> Swap TVM for USDT (Auto)</button>
+                <div id="swap-loading" class="hidden">Loading...</div>
+            </div>
+            <div class="col-md-6 mb-3">
+                <button id="swap-usdt-tvm-btn" class="btn btn-info btn-lg w-100" disabled><i class="fas fa-exchange-alt me-2"></i> Swap USDT for TVM (Auto)</button>
+                <div id="swap-usdt-loading" class="hidden">Loading...</div>
+            </div>
+        </div>
+        <!-- Pool & Layer Charts -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="chart-container">
+                    <canvas id="pool-chart"></canvas>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="chart-container">
+                    <canvas id="layer-chart"></canvas>
+                </div>
+            </div>
+        </div>
+        <!-- Layer Reserves Table -->
+        <table class="table table-dark table-striped mt-4">
+            <thead>
+                <tr><th>Layer</th><th>Reserve (TVM)</th><th>Cap Progress</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="layer-table">
+                <!-- JS Populated -->
+            </tbody>
+        </table>
+        <button class="btn btn-outline-light back-btn w-100" onclick="showSection('landing')"><i class="fas fa-arrow-left me-2"></i> Back</button>
+    </section>
+    <script src="main.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
