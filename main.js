@@ -1,4 +1,4 @@
-/******************************
+/****************************** 
  * main.js - Production-Ready as of August 16, 2025
  * Baseline: Smart Contract (Finalized, No Changes)
  * Consistency: SHE/ECF Framework, Fixed 12 SHE/TVM Peg with Dynamic Pricing, Offline P2P (MSL), Centralized SCL for Institutions
