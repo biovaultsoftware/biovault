@@ -11,7 +11,7 @@
  ******************************/
 // Base Setup / Global Constants (From main.js, Updated for 2025 Standards)
 const DB_NAME = 'BioVaultDB';
-const DB_VERSION = 3;
+const DB_VERSION = 2;
 const VAULT_STORE = 'vault';
 const PROOFS_STORE = 'proofs';
 const SEGMENTS_STORE = 'segments'; // New store for individual segments
@@ -195,21 +195,46 @@ const Encryption = {
 const DB = {
   openVaultDB: async () => {
     return new Promise((resolve, reject) => {
-      let req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = (evt) => {
+      const req = indexedDB.open(DB_NAME); // Open at current version
+      req.onsuccess = (evt) => {
         let db = evt.target.result;
-        if (!db.objectStoreNames.contains(VAULT_STORE)) {
-          db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains(PROOFS_STORE)) {
-          db.createObjectStore(PROOFS_STORE, { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains(SEGMENTS_STORE)) {
-          db.createObjectStore(SEGMENTS_STORE, { keyPath: 'segmentIndex' });
+        const needsUpgrade = !db.objectStoreNames.contains(VAULT_STORE) ||
+                             !db.objectStoreNames.contains(PROOFS_STORE) ||
+                             !db.objectStoreNames.contains(SEGMENTS_STORE);
+        if (needsUpgrade) {
+          const currentVersion = db.version;
+          db.close();
+          const upgradeReq = indexedDB.open(DB_NAME, currentVersion + 1);
+          upgradeReq.onupgradeneeded = (upgradeEvt) => {
+            db = upgradeEvt.target.result;
+            if (!db.objectStoreNames.contains(VAULT_STORE)) {
+              db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains(PROOFS_STORE)) {
+              db.createObjectStore(PROOFS_STORE, { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains(SEGMENTS_STORE)) {
+              db.createObjectStore(SEGMENTS_STORE, { keyPath: 'segmentIndex' });
+            }
+          };
+          upgradeReq.onsuccess = (upgradeEvt) => resolve(upgradeEvt.target.result);
+          upgradeReq.onerror = (err) => reject(err.target.error);
+        } else {
+          resolve(db);
         }
       };
-      req.onsuccess = (evt) => resolve(evt.target.result);
-      req.onerror = (evt) => reject(evt.target.error);
+      req.onerror = (evt) => {
+        // DB does not exist, create it
+        const createReq = indexedDB.open(DB_NAME, DB_VERSION);
+        createReq.onupgradeneeded = (createEvt) => {
+          const db = createEvt.target.result;
+          db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
+          db.createObjectStore(PROOFS_STORE, { keyPath: 'id' });
+          db.createObjectStore(SEGMENTS_STORE, { keyPath: 'segmentIndex' });
+        };
+        createReq.onsuccess = (createEvt) => resolve(createEvt.target.result);
+        createReq.onerror = (err) => reject(err.target.error);
+      };
     });
   },
   saveVaultDataToDB: async (iv, ciphertext, saltBase64) => {
@@ -598,22 +623,24 @@ const ContractInteractions = {
 // Segment Module (Micro-Ledger per Segment)
 const Segment = {
   initializeSegments: async () => {
-    const segments = [];
+    const existingSegments = await DB.loadSegmentsFromDB();
+    if (existingSegments.length >= INITIAL_BALANCE_SHE) return;
     for (let i = 1; i <= INITIAL_BALANCE_SHE; i++) {
-      const segment = {
-        segmentIndex: i,
-        currentOwner: vaultData.bioIBAN,
-        history: [{
-          event: 'Initialization',
-          timestamp: Date.now(),
-          from: 'Genesis',
-          to: vaultData.bioIBAN,
-          bioConst: GENESIS_BIO_CONSTANT + i,
-          integrityHash: await Utils.sha256Hex('init' + i + vaultData.bioIBAN)
-        }]
-      };
-      segments.push(segment);
-      await DB.saveSegmentToDB(segment);
+      if (!existingSegments.some(s => s.segmentIndex === i)) {
+        const segment = {
+          segmentIndex: i,
+          currentOwner: vaultData.bioIBAN,
+          history: [{
+            event: 'Initialization',
+            timestamp: Date.now(),
+            from: 'Genesis',
+            to: vaultData.bioIBAN,
+            bioConst: GENESIS_BIO_CONSTANT + i,
+            integrityHash: await Utils.sha256Hex('init' + i + vaultData.bioIBAN)
+          }]
+        };
+        await DB.saveSegmentToDB(segment);
+      }
     }
     vaultData.balanceSHE = INITIAL_BALANCE_SHE;
   },
@@ -801,23 +828,34 @@ if ('serviceWorker' in navigator) {
 async function init() {
   Notifications.requestPermission();
   P2P.handleNfcRead(); // Start NFC if supported
-  const stored = await DB.loadVaultDataFromDB();
+  let stored;
+  try {
+    stored = await DB.loadVaultDataFromDB();
+  } catch (e) {
+    console.error('Error loading vault data:', e);
+    stored = null;
+  }
   if (stored) {
     vaultData.authAttempts = stored.authAttempts;
     vaultData.lockoutTimestamp = stored.lockoutTimestamp;
   } else {
-    const credential = await Biometric.performBiometricAuthenticationForCreation();
-    if (credential) {
-      vaultData.credentialId = Encryption.bufferToBase64(credential.rawId);
-      vaultData.bioIBAN = await Utils.sha256Hex(Math.random().toString());
-      vaultData.joinTimestamp = Date.now();
-      vaultData.deviceKeyHash = await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32)));
-      vaultData.balanceSHE = INITIAL_BALANCE_SHE;
-      const salt = Utils.rand(16);
-      const pin = prompt("Set passphrase:");
-      derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), salt);
-      await Vault.promptAndSaveVault(salt);
-      await Segment.initializeSegments(); // Init segments on creation
+    try {
+      const credential = await Biometric.performBiometricAuthenticationForCreation();
+      if (credential) {
+        vaultData.credentialId = Encryption.bufferToBase64(credential.rawId);
+        vaultData.bioIBAN = await Utils.sha256Hex(Math.random().toString());
+        vaultData.joinTimestamp = Date.now();
+        vaultData.deviceKeyHash = await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32)));
+        vaultData.balanceSHE = INITIAL_BALANCE_SHE;
+        const salt = Utils.rand(16);
+        const pin = prompt("Set passphrase:");
+        derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), salt);
+        await Vault.promptAndSaveVault(salt);
+        await Segment.initializeSegments(); // Init segments on creation
+      }
+    } catch (e) {
+      console.error('Error during vault creation:', e);
+      // Continue execution even if creation fails partially
     }
   }
   // Event Listeners
@@ -829,15 +867,31 @@ async function init() {
       return;
     }
     const pin = prompt("Enter passphrase:");
-    const stored = await DB.loadVaultDataFromDB();
+    let stored;
+    try {
+      stored = await DB.loadVaultDataFromDB();
+    } catch (e) {
+      console.error('Error loading vault data for unlock:', e);
+      UI.showAlert("Error accessing vault.");
+      return;
+    }
     if (stored) {
-      derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
       try {
+        derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
         vaultData = await Encryption.decryptData(derivedKey, stored.iv, stored.ciphertext);
         if (await Biometric.performBiometricAssertion(vaultData.credentialId)) {
           vaultUnlocked = true;
           document.getElementById('lockedScreen').classList.add('hidden');
           document.getElementById('vaultUI').classList.remove('hidden');
+          // Check and initialize segments if missing
+          const segments = await DB.loadSegmentsFromDB();
+          if (segments.length < INITIAL_BALANCE_SHE) {
+            try {
+              await Segment.initializeSegments();
+            } catch (e) {
+              console.error('Error initializing missing segments:', e);
+            }
+          }
           await Vault.updateBalanceFromSegments(); // Update balance from segments
           Vault.updateVaultUI();
           await Proofs.generateAutoProof(); // Auto-generate proofs on unlock for dashboard
@@ -850,7 +904,8 @@ async function init() {
           UI.showAlert("Biometric failed.");
         }
       } catch (err) {
-        UI.showAlert("Invalid passphrase.");
+        console.error('Unlock error:', err);
+        UI.showAlert("Invalid passphrase or decryption failed.");
       }
     }
   });
