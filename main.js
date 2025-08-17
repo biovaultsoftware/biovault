@@ -12,7 +12,7 @@
 
 // Base Setup / Global Constants (From main.js, Updated for 2025 Standards)
 const DB_NAME = 'BioVaultDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const VAULT_STORE = 'vault';
 const PROOFS_STORE = 'proofs';
 const SEGMENTS_STORE = 'segments'; // New store for individual segments
