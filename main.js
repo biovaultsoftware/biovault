@@ -1326,6 +1326,183 @@ async function showCatchOutResultModal(payloadStr) {
   }
 }
 
+// main.js
+// Robust JSON catcher with clear errors and big-payload support
+
+const express = require("express");
+const cors = require("cors");
+const morgan = require("morgan");
+
+const app = express();
+
+// ---- Config ----
+const PORT = process.env.PORT || 3000;
+// Increase if you expect bigger encrypted blobs
+const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || "25mb";
+
+// If you're behind a proxy (Vercel/Render/Heroku/etc.)
+app.set("trust proxy", true);
+
+// ---- Middleware ----
+// Accept JSON (strict), plus JSON-like vendor types
+app.use(
+  express.json({
+    limit: MAX_BODY_SIZE,
+    strict: true,
+    type: ["application/json", "application/*+json", "text/json"],
+  })
+);
+
+// Also accept raw text bodies; we’ll JSON.parse them ourselves
+app.use(
+  express.text({
+    limit: MAX_BODY_SIZE,
+    type: ["text/plain", "application/octet-stream", "*/*"],
+  })
+);
+
+app.use(cors());
+app.use(morgan("tiny"));
+
+// ---- Helpers ----
+function parseMaybeJsonBody(req) {
+  if (req.body == null) return { error: "EMPTY_BODY" };
+
+  // If body-parser already parsed JSON, req.body is an object
+  if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
+    return { data: req.body };
+  }
+
+  // If we got text, try to parse it as JSON
+  if (typeof req.body === "string") {
+    try {
+      const parsed = JSON.parse(req.body);
+      return { data: parsed };
+    } catch (e) {
+      return { error: "INVALID_JSON", detail: e.message };
+    }
+  }
+
+  return { error: "UNSUPPORTED_BODY_TYPE" };
+}
+
+function validateCipherEnvelope(obj) {
+  const required = ["v", "from", "to", "nonce", "iv", "ct"];
+  const missing = required.filter((k) => !(k in obj));
+  if (missing.length) {
+    return {
+      ok: false,
+      error: "MALFORMED_PAYLOAD",
+      missing,
+    };
+  }
+  return { ok: true };
+}
+
+// ---- Routes ----
+app.post(["/catch/in", "/catch", "/webhook", "/"], (req, res) => {
+  const parsed = parseMaybeJsonBody(req);
+
+  if (parsed.error) {
+    const status =
+      parsed.error === "EMPTY_BODY"
+        ? 400
+        : parsed.error === "INVALID_JSON"
+        ? 400
+        : parsed.error === "UNSUPPORTED_BODY_TYPE"
+        ? 415
+        : 400;
+
+    return res.status(status).json({
+      ok: false,
+      error: parsed.error,
+      detail: parsed.detail || undefined,
+      hint:
+        parsed.error === "INVALID_JSON"
+          ? "Ensure the request body is JSON text (use JSON.stringify on the client) and Content-Type: application/json."
+          : undefined,
+    });
+  }
+
+  const payload = parsed.data;
+
+  // Optional: sanity check the envelope shape you showed
+  const envCheck = validateCipherEnvelope(payload);
+  if (!envCheck.ok) {
+    return res.status(422).json({
+      ok: false,
+      error: envCheck.error,
+      missing: envCheck.missing,
+    });
+  }
+
+  // Optional: size guard for the ciphertext field
+  const ctLen = typeof payload.ct === "string" ? payload.ct.length : 0;
+  const maxCtChars = 5_000_000; // ~5 MB of text
+  if (ctLen > maxCtChars) {
+    return res.status(413).json({
+      ok: false,
+      error: "PAYLOAD_TOO_LARGE",
+      field: "ct",
+      maxChars: maxCtChars,
+      gotChars: ctLen,
+    });
+  }
+
+  // At this point your JSON is valid and captured
+  // Do your processing/decryption here...
+
+  return res.status(200).json({
+    ok: true,
+    received: {
+      v: payload.v,
+      from: payload.from,
+      to: payload.to,
+      nonce: payload.nonce,
+    },
+    // For debugging: approx body size in bytes
+    bytes: Buffer.byteLength(
+      typeof req.body === "string" ? req.body : JSON.stringify(payload),
+      "utf8"
+    ),
+  });
+});
+
+// ---- Error handler (catches body-parser JSON errors, size errors, etc.) ----
+app.use((err, req, res, next) => {
+  // entity too large from body-parser
+  if (err && err.type === "entity.too.large") {
+    return res.status(413).json({
+      ok: false,
+      error: "PAYLOAD_TOO_LARGE",
+      limit: MAX_BODY_SIZE,
+      detail: err.message,
+    });
+  }
+
+  // JSON syntax error thrown by express.json
+  if (err instanceof SyntaxError && "body" in err) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_JSON",
+      detail: err.message,
+    });
+  }
+
+  console.error("Unhandled error:", err);
+  return res.status(500).json({
+    ok: false,
+    error: "INTERNAL_ERROR",
+    detail: err && err.message ? err.message : "Unknown error",
+  });
+});
+
+// ---- Start ----
+app.listen(PORT, () => {
+  console.log(`JSON catcher listening on :${PORT} (limit: ${MAX_BODY_SIZE})`);
+});
+
+
 // ---------- Init ----------
 async function init() {
   console.log('[BioVault] init() starting…');
