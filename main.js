@@ -69,7 +69,7 @@ const vaultSyncChannel = new BroadcastChannel('vault-sync');
 const WALLET_CONNECT_PROJECT_ID = 'c4f79cc9f2f73b737d4d06795a48b4a5';
 
 // ---- QR/ZIP integration constants ----
-const QR_CHUNK_MAX = 900;     // safe per-frame payload length for QR (approx, ECC M)
+const QR_CHUNK_MAX = 900;     // safe per-frame payload length for QR (approx, ECC M) - bytes, handled safely below
 const QR_SIZE = 512;          // px
 const QR_MARGIN = 2;          // quiet zone
 var _qrLibReady = false;
@@ -121,6 +121,27 @@ var lastCatchOutPayloadStr = ""; // string
 var lastQrFrames = [];           // array of strings with "BC|i|N|chunk"
 var lastQrFrameIndex = 0;
 
+// ---------- Secure Randomness Helpers ----------
+function randU32() {
+  var a = new Uint32Array(1);
+  crypto.getRandomValues(a);
+  return a[0];
+}
+// Rejection sampling to avoid modulo bias
+function randInt(maxExclusive) {
+  if (!Number.isFinite(maxExclusive) || maxExclusive <= 0) throw new Error('randInt bad max');
+  var max = Math.floor(maxExclusive) >>> 0;
+  var limit = 0x100000000 - (0x100000000 % max);
+  var x;
+  do { x = randU32(); } while (x >= limit);
+  return x % max;
+}
+function randNonce() {
+  var a = randU32() & 0xFFFFFF;
+  var b = randU32() & 0xFFFFFF;
+  return (a * 16777216) + b; // < 2^48, safe in JS Number
+}
+
 // ---------- Utils ----------
 const Utils = {
   enc: new TextEncoder(),
@@ -148,7 +169,14 @@ const Utils = {
     const signature = await crypto.subtle.sign("HMAC", key, Utils.enc.encode(message));
     return Utils.toB64(signature);
   },
-  sanitizeInput: function (input) { return (typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(input) : String(input)); },
+  sanitizeInput: function (input, maxLen) {
+    var s = typeof input === 'string' ? input : String(input);
+    var lim = (typeof maxLen === 'number' && maxLen > 0) ? maxLen : 4096;
+    if (s.length > lim) s = s.slice(0, lim);
+    if (typeof DOMPurify !== 'undefined') return DOMPurify.sanitize(s, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
+    // Minimal safe fallback for text contexts
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  },
   to0x: function (hex) { return hex && hex.slice(0,2)==='0x' ? hex : ('0x' + hex); }
 };
 
@@ -156,9 +184,15 @@ const Utils = {
 function injectScript(src) {
   return new Promise(function(resolve, reject){
     var s = document.createElement('script');
-    s.src = src; s.async = true;
-    s.onload = resolve; s.onerror = reject;
+    var done = false;
+    s.src = src;
+    s.async = true;
+    s.crossOrigin = 'anonymous';
+    s.referrerPolicy = 'no-referrer';
+    s.onload = function(){ if (!done) { done = true; resolve(); } };
+    s.onerror = function(e){ if (!done) { done = true; reject(e); } };
     document.head.appendChild(s);
+    setTimeout(function(){ if (!done) { done = true; reject(new Error('Script load timeout: ' + src)); } }, 15000);
   });
 }
 async function ensureQrLib() {
@@ -330,6 +364,16 @@ const DB = {
       tx.objectStore('replays').put({ nonce: nonce, ts: Date.now() });
       tx.oncomplete = res; tx.onerror = (e)=>rej(e.target.error);
     });
+  },
+  // Bulk put for performance
+  bulkPutSegments: async function(segments) {
+    var db = await DB.openVaultDB();
+    return new Promise(function(resolve, reject){
+      var tx = db.transaction([SEGMENTS_STORE], 'readwrite');
+      var store = tx.objectStore(SEGMENTS_STORE);
+      for (var i=0;i<segments.length;i++) store.put(segments[i]);
+      tx.oncomplete = resolve; tx.onerror = function(e){ reject(e.target.error); };
+    });
   }
 };
 
@@ -443,6 +487,7 @@ function revealVaultUI() {
   if (locked) locked.classList.add('hidden');
   if (vault) { vault.classList.remove('hidden'); vault.style.display = 'block'; }
   try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'true'); } catch(e){}
+  try { if (vaultSyncChannel && vaultSyncChannel.postMessage) vaultSyncChannel.postMessage('LOCK'); } catch(e){}
 }
 function restoreLockedUI() {
   var wp = document.querySelector('#biovault .whitepaper');
@@ -597,20 +642,28 @@ const Wallet = {
 const Proofs = {
   generateAutoProof: async () => {
     if (!vaultUnlocked) throw new Error('Vault locked.');
-    const segmentIndex = Math.floor(Math.random() * 1200) + 1;
-    const currentBioConst = vaultData.initialBioConstant + segmentIndex;
-    const ownershipProof = Utils.to0x(await Utils.sha256Hex('ownership' + segmentIndex));
-    const unlockIntegrityProof = Utils.to0x(await Utils.sha256Hex('integrity' + currentBioConst));
-    const spentProof = Utils.to0x(await Utils.sha256Hex('spent' + segmentIndex));
-    const ownershipChangeCount = 0;
 
-    const biometricZKP = await Biometric.generateBiometricZKP();
-    if (!biometricZKP) throw new Error('Biometric ZKP generation failed or was denied.');
+    // pick a random segment owned by the user
+    var all = await DB.loadSegmentsFromDB();
+    var mine = [];
+    for (var i=0;i<all.length;i++) if (all[i].currentOwner === vaultData.bioIBAN) mine.push(all[i]);
+    if (mine.length === 0) throw new Error('No owned segments to claim against.');
+    var seg = mine[randInt(mine.length)];
+    var segmentIndex = seg.segmentIndex;
+
+    var currentBioConst = vaultData.initialBioConstant + segmentIndex;
+    var ownershipProof = Utils.to0x(await Utils.sha256Hex('ownership' + segmentIndex));
+    var unlockIntegrityProof = Utils.to0x(await Utils.sha256Hex('integrity' + currentBioConst));
+    var spentProof = Utils.to0x(await Utils.sha256Hex('spent' + segmentIndex));
+    var ownershipChangeCount = 0;
+
+    var biometricZKP = await Biometric.generateBiometricZKP();
+    if (!biometricZKP) throw new Error('Biometric proof denied.');
 
     autoProofs = [{ segmentIndex: segmentIndex, currentBioConst: currentBioConst, ownershipProof: ownershipProof, unlockIntegrityProof: unlockIntegrityProof, spentProof: spentProof, ownershipChangeCount: ownershipChangeCount, biometricZKP: biometricZKP }];
     autoDeviceKeyHash = vaultData.deviceKeyHash;
     autoUserBioConstant = currentBioConst;
-    autoNonce = Math.floor(Math.random() * 1000000);
+    autoNonce = randNonce();
     autoSignature = await Proofs.signClaim(autoProofs, autoDeviceKeyHash, autoUserBioConstant, autoNonce);
 
     await DB.saveProofsToDB({
@@ -772,21 +825,23 @@ const ContractInteractions = {
 // ---------- Segment (Micro-ledger) ----------
 const Segment = {
   initializeSegments: async () => {
+    var nowTs = Date.now();
+    var seed = [];
     for (let i = 1; i <= INITIAL_BALANCE_SHE; i++) {
-      const segment = {
+      seed.push({
         segmentIndex: i,
         currentOwner: vaultData.bioIBAN,
         history: [{
           event:'Initialization',
-          timestamp: Date.now(),
+          timestamp: nowTs,
           from:'Genesis',
           to: vaultData.bioIBAN,
           bioConst: GENESIS_BIO_CONSTANT + i,
           integrityHash: await Utils.sha256Hex('init' + i + vaultData.bioIBAN)
         }]
-      };
-      await DB.saveSegmentToDB(segment);
+      });
     }
+    await DB.bulkPutSegments(seed);
     vaultData.balanceSHE = INITIAL_BALANCE_SHE;
   },
   validateSegment: async (segment) => {
@@ -868,6 +923,8 @@ const P2P = {
       try { payload = JSON.parse(payloadStr); } catch (e) { return UI.showAlert('Invalid payload JSON.'); }
       if (!payload || !Array.isArray(payload.chains)) return UI.showAlert('Malformed payload: missing chains array.');
       if (!payload.nonce) return UI.showAlert('Malformed payload: missing nonce.');
+      if (payload.v !== 1) return UI.showAlert('Unsupported payload version.');
+      if (payload.to !== vaultData.bioIBAN) return UI.showAlert('Payload not addressed to this IBAN.');
 
       if (await DB.hasReplayNonce(payload.nonce)) return UI.showAlert('Duplicate transfer detected (replay).');
       await DB.putReplayNonce(payload.nonce);
@@ -875,10 +932,22 @@ const P2P = {
       var validSegments = 0;
       for (var i=0;i<payload.chains.length;i++) {
         var entry = payload.chains[i];
+        if (!entry || typeof entry.segmentIndex !== 'number' || !Array.isArray(entry.history)) continue;
+
         var seg = await DB.getSegment(entry.segmentIndex);
         var reconstructed = seg ? JSON.parse(JSON.stringify(seg)) : { segmentIndex: entry.segmentIndex, currentOwner: 'Unknown', history: [] };
-        // Merge incoming history tail
-        for (var j=0;j<entry.history.length;j++) reconstructed.history.push(entry.history[j]);
+
+        // Tail-merge using integrity hash anchor to avoid duplication
+        var incoming = entry.history;
+        var anchor = -1;
+        var localHashToIndex = {};
+        for (var lh=0; lh<reconstructed.history.length; lh++) localHashToIndex[ reconstructed.history[lh].integrityHash ] = lh;
+        for (var ih=0; ih<incoming.length; ih++) {
+          var h = incoming[ih] && incoming[ih].integrityHash;
+          if (h && localHashToIndex.hasOwnProperty(h)) anchor = Math.max(anchor, localHashToIndex[h]);
+        }
+        if (anchor >= 0) reconstructed.history = reconstructed.history.slice(0, anchor+1);
+        for (var j=0;j<incoming.length;j++) reconstructed.history.push(incoming[j]);
 
         if (!(await Segment.validateSegment(reconstructed))) continue;
 
@@ -921,6 +990,7 @@ const Notifications = {
 };
 
 // ---------- Backups ----------
+// LEGACY / INSECURE: plaintext exports kept for compatibility; prefer encrypted versions below.
 async function exportFullBackup() {
   const segments = await DB.loadSegmentsFromDB();
   const proofsBundle = await DB.loadProofsFromDB();
@@ -938,17 +1008,11 @@ async function importFullBackup(file) {
     if (!stored || !stored.salt) return UI.showAlert("Unlock once before importing (no salt).");
     const pin = prompt("Enter passphrase to re-encrypt imported vault:");
     if (!pin) return UI.showAlert("Import canceled.");
-    derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
+    derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin, 512), stored.salt);
   }
   vaultData = obj.vaultData;
   const segs = obj.segments;
-  const db = await DB.openVaultDB();
-  await new Promise((res, rej) => {
-    const tx = db.transaction([SEGMENTS_STORE], 'readwrite');
-    tx.objectStore(SEGMENTS_STORE).clear();
-    segs.forEach(function(s){ tx.objectStore(SEGMENTS_STORE).put(s); });
-    tx.oncomplete = res; tx.onerror = (e)=>rej(e.target.error);
-  });
+  await DB.bulkPutSegments(segs);
   if (obj.proofsBundle) await DB.saveProofsToDB(obj.proofsBundle);
   await persistVaultData();
   await Vault.updateBalanceFromSegments();
@@ -960,6 +1024,7 @@ function exportTransactions() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'transactions.json'; a.click();
 }
+// UNSAFE plaintext backup (kept for legacy UI; do not use in production)
 function backupVault() {
   const backup = JSON.stringify(vaultData);
   const blob = new Blob([backup], { type: 'application/json' });
@@ -979,7 +1044,7 @@ function importVault() {
         if (!stored || !stored.salt) return UI.showAlert("Unlock once before importing (no salt found).");
         const pin = prompt("Enter passphrase to re-encrypt imported vault:");
         if (!pin) return UI.showAlert("Import canceled.");
-        derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
+        derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin, 512), stored.salt);
       }
       vaultData = imported;
       await Vault.promptAndSaveVault();
@@ -992,6 +1057,42 @@ function importVault() {
   };
   reader.readAsText(file);
 }
+
+// Encrypted backups (preferred)
+async function exportEncryptedBackup() {
+  if (!derivedKey) { UI.showAlert('Unlock the vault first.'); return; }
+  var segments = await DB.loadSegmentsFromDB();
+  var proofsBundle = await DB.loadProofsFromDB();
+  var payload = { v:1, vaultData: vaultData, segments: segments, proofsBundle: proofsBundle, exportedAt: Date.now() };
+  var randSalt = Utils.rand(16);
+  // device-bound temp key (example strategy)
+  var tmpKey = await Vault.deriveKeyFromPIN(vaultData.bioIBAN + ':' + vaultData.joinTimestamp, randSalt);
+  var enc = await Encryption.encryptData(tmpKey, payload);
+  var pack = { v:1, salt: Encryption.bufferToBase64(randSalt), iv: Encryption.bufferToBase64(enc.iv), ct: Encryption.bufferToBase64(enc.ciphertext) };
+  var blob = new Blob([JSON.stringify(pack)], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href = url; a.download = 'biovault.encbackup.json'; a.click();
+  URL.revokeObjectURL(url);
+}
+async function importEncryptedBackup(file) {
+  var txt = await file.text();
+  var pack = JSON.parse(txt);
+  if (!pack || pack.v !== 1) return UI.showAlert('Invalid encrypted backup.');
+  var salt = Encryption.base64ToBuffer(pack.salt);
+  var iv   = Encryption.base64ToBuffer(pack.iv);
+  var ct   = Encryption.base64ToBuffer(pack.ct);
+  var tmpKey = await Vault.deriveKeyFromPIN(vaultData.bioIBAN + ':' + vaultData.joinTimestamp, salt);
+  var obj = await Encryption.decryptData(tmpKey, iv, ct);
+  if (!obj || obj.v !== 1 || !obj.vaultData || !Array.isArray(obj.segments)) return UI.showAlert('Backup content invalid.');
+  vaultData = obj.vaultData;
+  await DB.bulkPutSegments(obj.segments);
+  if (obj.proofsBundle) await DB.saveProofsToDB(obj.proofsBundle);
+  await persistVaultData();
+  await Vault.updateBalanceFromSegments();
+  Vault.updateVaultUI();
+  UI.showAlert('Encrypted backup imported.');
+}
+
 function copyToClipboard(id) {
   const textEl = document.getElementById(id);
   if (!textEl) return;
@@ -1063,11 +1164,19 @@ function enforceSingleVault() {
 function preventMultipleVaults() {
   window.addEventListener('storage', function(e) {
     if (e.key === VAULT_UNLOCKED_KEY) {
-      const unlocked = e.newValue === 'true';
-      if (unlocked && !vaultUnlocked) { vaultUnlocked = true; revealVaultUI(); }
+      var unlocked = e.newValue === 'true';
       if (!unlocked && vaultUnlocked) { vaultUnlocked = false; if (Vault.lockVault) Vault.lockVault(); }
+      // Do NOT auto-unlock on 'true'
     }
   });
+  try {
+    if (vaultSyncChannel && typeof vaultSyncChannel.postMessage === 'function') {
+      vaultSyncChannel.onmessage = function(ev){
+        if (!ev || !ev.data) return;
+        if (ev.data === 'LOCK') { Vault.lockVault(); }
+      };
+    }
+  } catch(e){}
 }
 function isVaultLockedOut() {
   if (!vaultData.lockoutTimestamp) return false;
@@ -1099,12 +1208,27 @@ async function persistVaultData(saltBuf) {
 }
 
 // ---------- Catch-Out Result helpers (QR / ZIP) ----------
-function splitIntoFrames(str, maxLen) {
-  var chunks = [];
-  for (var i=0;i<str.length;i+=maxLen) chunks.push(str.slice(i, i+maxLen));
-  var total = chunks.length;
+function utf8Bytes(str) { return new TextEncoder().encode(str); }
+function sliceUtf8(str, maxBytes) {
+  var enc = new TextEncoder();
+  var dec = new TextDecoder();
+  var bytes = enc.encode(str);
+  if (bytes.length <= maxBytes) return str;
+  var cut = maxBytes;
+  while (cut > 0 && (bytes[cut] & 0xC0) === 0x80) cut--;
+  return dec.decode(bytes.slice(0, cut));
+}
+function splitIntoFrames(str, maxBytes) {
+  var frames = [];
+  var remaining = str;
+  while (remaining.length > 0) {
+    var chunk = sliceUtf8(remaining, maxBytes);
+    frames.push(chunk);
+    remaining = remaining.slice(chunk.length);
+  }
+  var total = frames.length;
   var out = [];
-  for (var j=0;j<total;j++) out.push('BC|' + (j+1) + '|' + total + '|' + chunks[j]);
+  for (var i=0;i<total;i++) out.push('BC|' + (i+1) + '|' + total + '|' + frames[i]);
   return out;
 }
 function updateQrIndicator() {
@@ -1150,7 +1274,6 @@ async function downloadFramesZip() {
     try {
       await window.QRCode.toCanvas(c, lastQrFrames[i], { width: QR_SIZE, margin: QR_MARGIN, errorCorrectionLevel: 'M' });
       var dataURL = c.toDataURL('image/png');
-      // Convert base64 to binary
       var base64 = dataURL.split(',')[1];
       zip.file('qr_' + String(i+1).padStart(3,'0') + '.png', base64, { base64:true });
     } catch (e) {
@@ -1167,26 +1290,20 @@ async function downloadFramesZip() {
 
 // Open result modal and prime textarea + clipboard
 async function showCatchOutResultModal(payloadStr) {
-  // Fill textarea
   var ta = document.getElementById('catchOutResultText');
   if (ta) ta.value = payloadStr;
 
-  // Copy to clipboard
   try { await navigator.clipboard.writeText(payloadStr); } catch(e){ console.warn('Clipboard copy failed', e); }
 
-  // Reset QR collapse state
   var qrColl = document.getElementById('qrCollapse');
   if (qrColl && qrColl.classList.contains('show')) {
-    // force re-collapse so user needs to open explicitly
     var collapse = window.bootstrap ? new bootstrap.Collapse(qrColl, { toggle:false }) : null;
     if (collapse) collapse.hide();
     else qrColl.classList.remove('show');
   }
 
-  // Prepare frames
   await prepareFramesForPayload(payloadStr);
 
-  // Show modal
   var modalEl = document.getElementById('modalCatchOutResult');
   if (modalEl) {
     var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
@@ -1223,18 +1340,28 @@ async function init() {
       vaultData.deviceKeyHash = Utils.to0x(await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32))));
       vaultData.balanceSHE = INITIAL_BALANCE_SHE;
 
-      const salt = Utils.rand(16);
-      const pin = prompt("Set passphrase:");
-      derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || ''), salt);
+      var salt = Utils.rand(16);
+      var pin, pin2;
+      for (var tries=0; tries<3; tries++) {
+        pin  = prompt("Set a passphrase (min 8 chars):");
+        if (!pin || pin.length < 8) { alert("Passphrase too short."); continue; }
+        pin2 = prompt("Confirm your passphrase:");
+        if (pin2 !== pin) { alert("Passphrases do not match."); continue; }
+        break;
+      }
+      if (!pin || pin.length < 8 || pin !== pin2) { alert("Setup canceled."); return; }
+      derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin, 512), salt);
       await persistVaultData(salt);
 
-      for (let i=1;i<=INITIAL_BALANCE_SHE;i++){
-        await DB.saveSegmentToDB({
+      var nowTs = Date.now();
+      var seed = [];
+      for (var i=1;i<=INITIAL_BALANCE_SHE;i++){
+        seed.push({
           segmentIndex: i,
           currentOwner: vaultData.bioIBAN,
           history: [{
             event:'Initialization',
-            timestamp: Date.now(),
+            timestamp: nowTs,
             from:'Genesis',
             to: vaultData.bioIBAN,
             bioConst: GENESIS_BIO_CONSTANT + i,
@@ -1242,6 +1369,7 @@ async function init() {
           }]
         });
       }
+      await DB.bulkPutSegments(seed);
 
       vaultUnlocked = true;
       revealVaultUI();
@@ -1266,7 +1394,7 @@ async function init() {
     const pin = prompt("Enter passphrase:");
     const stored = await DB.loadVaultDataFromDB();
     if (!stored) return;
-    derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || ''), stored.salt);
+    derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || '', 512), stored.salt);
     try {
       vaultData = await Encryption.decryptData(derivedKey, stored.iv, stored.ciphertext);
       let ok = await Biometric.performBiometricAssertion(vaultData.credentialId);
@@ -1281,6 +1409,7 @@ async function init() {
       await Vault.updateBalanceFromSegments();
       Vault.updateVaultUI();
       try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'true'); } catch(e){}
+      try { if (vaultSyncChannel && vaultSyncChannel.postMessage) vaultSyncChannel.postMessage('LOCK'); } catch(e){}
     } catch (e) {
       console.error('[BioVault] Unlock error', e);
       await handleFailedAuthAttempt();
@@ -1311,7 +1440,6 @@ async function init() {
   // Claim modal open (optional separate button)
   var claimBtn = byId('claim-tvm-btn');
   if (claimBtn) claimBtn.addEventListener('click', function(){
-    // open claim modal for parameters; the form will call on-chain
     var modalEl = document.getElementById('modalClaim');
     if (modalEl) {
       var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
@@ -1324,20 +1452,18 @@ async function init() {
   var formCO = byId('formCatchOut');
   if (formCO) formCO.addEventListener('submit', async function(ev){
     ev.preventDefault();
-    var recv = Utils.sanitizeInput((byId('receiverBioModal')||{}).value || '');
-    var amt  = Utils.sanitizeInput((byId('amountSegmentsModal')||{}).value || '');
-    var note = Utils.sanitizeInput((byId('noteModal')||{}).value || '');
+    var recv = Utils.sanitizeInput((byId('receiverBioModal')||{}).value || '', 256);
+    var amt  = Utils.sanitizeInput((byId('amountSegmentsModal')||{}).value || '', 32);
+    var note = Utils.sanitizeInput((byId('noteModal')||{}).value || '', 1024);
     if (!recv) { formCO.classList.add('was-validated'); return; }
     var amtNum = parseInt(amt, 10);
     if (isNaN(amtNum) || amtNum <= 0) { formCO.classList.add('was-validated'); return; }
 
-    // Busy spinner
     var sp = byId('spCreateCatchOut'); if (sp) sp.classList.remove('d-none');
     var btn = byId('btnCreateCatchOut'); if (btn) btn.disabled = true;
 
     try {
       await P2P.createCatchOut(recv, amtNum, note);
-      // Close the Catch-Out creator, show result handled by createCatchOut()
       if (window.bootstrap) {
         var m1 = bootstrap.Modal.getInstance(document.getElementById('modalCatchOut'));
         if (m1) m1.hide();
@@ -1364,11 +1490,8 @@ async function init() {
   if (qrCollapseEl && window.bootstrap) {
     qrCollapseEl.addEventListener('shown.bs.collapse', function(){ renderQrFrame(); });
   } else if (qrCollapseEl) {
-    // fallback: render on click of toggle
     var btnShowQR = byId('btnShowQR');
-    if (btnShowQR) btnShowQR.addEventListener('click', function(){
-      setTimeout(renderQrFrame, 50);
-    });
+    if (btnShowQR) btnShowQR.addEventListener('click', function(){ setTimeout(renderQrFrame, 50); });
   }
 
   // Multi-QR Nav
@@ -1469,7 +1592,7 @@ async function loadDashboardData() {
 
   const c1 = document.getElementById('pool-chart');
   const c2 = document.getElementById('layer-chart');
-  if (window.Chart && c1 && c2) {
+  if (typeof Chart !== 'undefined' && c1 && c2) {
     if (c1._chart) c1._chart.destroy();
     c1._chart = new Chart(c1, {
       type: 'doughnut',
