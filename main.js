@@ -1,3 +1,4 @@
+'use strict';
 /******************************
  * main.js - ES2018 compatible (no optional chaining / numeric separators)
  * Ultimate master-class build: compact+encrypted P2P, network guards, robust charts, safe base64, 0x Bio-IBAN, bonus constant.
