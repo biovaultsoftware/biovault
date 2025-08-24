@@ -1,11 +1,15 @@
 /******************************
  * main.js - ES2018 compatible (no optional chaining / numeric separators)
  * Ultimate master-class build: compact+encrypted P2P, network guards, robust charts, safe base64, 0x Bio-IBAN, bonus constant.
+ * UPDATED: Implements clarified rules:
+ *  - On-chain TVM claim uses segments with ownershipChangeCount === 1 (no 10-history on-chain).
+ *  - P2P sends only unlocked segments; after send, auto-unlock equal count if caps allow.
+ *  - Tracks daily/monthly/yearly segment caps (360/3600/10800) and yearly TVM (900 + 100 parity).
  ******************************/
 
 // ---------- Base Setup / Global Constants ----------
 const DB_NAME = 'BioVaultDB';
-const DB_VERSION = 3;
+const DB_VERSION = 4; // bumped for new fields
 const VAULT_STORE = 'vault';
 const PROOFS_STORE = 'proofs';
 const SEGMENTS_STORE = 'segments';
@@ -47,7 +51,7 @@ const ABI = [
 ];
 
 const GENESIS_BIO_CONSTANT = 1736565605;
-const BIO_TOLERANCE = 720;
+const BIO_TOLERANCE = 720; // seconds
 const BIO_STEP = 1;
 const SEGMENTS_PER_LAYER = 1200;
 const LAYERS = 10;
@@ -79,6 +83,11 @@ const QR_MARGIN = 2;          // quiet zone
 var _qrLibReady = false;
 var _zipLibReady = false;
 var _chartLibReady = false;
+
+// ---------- Derived segment caps (segments, not TVM) ----------
+const DAILY_CAP_SEG  = DAILY_CAP_TVM  * SEGMENTS_PER_TVM; // 360
+const MONTHLY_CAP_SEG= MONTHLY_CAP_TVM* SEGMENTS_PER_TVM; // 3600
+const YEARLY_CAP_SEG = YEARLY_CAP_TVM * SEGMENTS_PER_TVM; // 10800
 
 // ---------- State ----------
 let vaultUnlocked = false;
@@ -116,7 +125,17 @@ let vaultData = {
   credentialId: null,
   userWallet: "",
   deviceKeyHash: "",
-  layerBalances: Array.from({length: LAYERS}, function(){ return 0; })
+  layerBalances: Array.from({length: LAYERS}, function(){ return 0; }),
+
+  // NEW: caps & unlock tracking (UTC)
+  caps: {
+    dayKey: "", monthKey: "", yearKey: "",
+    dayUsedSeg: 0, monthUsedSeg: 0, yearUsedSeg: 0, // unlocks this period
+    tvmYearlyClaimed: 0 // on-chain claims recorded locally (contract is source of truth)
+  },
+
+  // NEW: next index to unlock (deterministic 1..12,000 per year)
+  nextSegmentIndex: INITIAL_BALANCE_SHE + 1
 };
 vaultData.layerBalances[0] = INITIAL_BALANCE_SHE;
 
@@ -128,7 +147,7 @@ var lastQrFrameIndex = 0;
 
 // ---------- Utils (safe base64 / crypto helpers) ----------
 function _u8ToB64(u8) {
-  var CHUNK = 0x8000; // 32KB chunks to avoid call stack overflow
+  var CHUNK = 0x8000; // 32KB chunks
   var s = '';
   for (var i = 0; i < u8.length; i += CHUNK) {
     s += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
@@ -481,6 +500,35 @@ function restoreLockedUI() {
   try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'false'); } catch(e){}
 }
 
+// ---------- Time/Caps Helpers ----------
+function utcDayKey(d){ const dt=new Date(d); return dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,'0')+"-"+String(dt.getUTCDate()).padStart(2,'0'); }
+function utcMonthKey(d){ const dt=new Date(d); return dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,'0'); }
+function utcYearKey(d){ const dt=new Date(d); return String(new Date(d).getUTCFullYear()); }
+
+function resetCapsIfNeeded(nowTs){
+  const dKey = utcDayKey(nowTs);
+  const mKey = utcMonthKey(nowTs);
+  const yKey = utcYearKey(nowTs);
+  if (vaultData.caps.dayKey !== dKey){ vaultData.caps.dayKey = dKey; vaultData.caps.dayUsedSeg = 0; }
+  if (vaultData.caps.monthKey !== mKey){ vaultData.caps.monthKey = mKey; vaultData.caps.monthUsedSeg = 0; }
+  if (vaultData.caps.yearKey !== yKey){ vaultData.caps.yearKey = yKey; vaultData.caps.yearUsedSeg = 0; vaultData.caps.tvmYearlyClaimed = 0; }
+}
+function canUnlockSegments(n){
+  const now = Date.now();
+  resetCapsIfNeeded(now);
+  if (vaultData.caps.dayUsedSeg + n > DAILY_CAP_SEG) return false;
+  if (vaultData.caps.monthUsedSeg + n > MONTHLY_CAP_SEG) return false;
+  if (vaultData.caps.yearUsedSeg + n > YEARLY_CAP_SEG) return false;
+  return true;
+}
+function recordUnlock(n){
+  const now = Date.now();
+  resetCapsIfNeeded(now);
+  vaultData.caps.dayUsedSeg   += n;
+  vaultData.caps.monthUsedSeg += n;
+  vaultData.caps.yearUsedSeg  += n;
+}
+
 // ---------- Vault ----------
 const Vault = {
   deriveKeyFromPIN: async (pin, salt) => {
@@ -657,51 +705,215 @@ const Wallet = {
   }
 };
 
-// ---------- Proofs ----------
-const Proofs = {
-  generateAutoProof: async () => {
-    if (!vaultUnlocked) throw new Error('Vault locked.');
-    const segmentIndex = Math.floor(Math.random() * 1200) + 1;
-    const currentBioConst = vaultData.initialBioConstant + segmentIndex;
-    const ownershipProof = Utils.to0x(await Utils.sha256Hex('ownership' + segmentIndex));
-    const unlockIntegrityProof = Utils.to0x(await Utils.sha256Hex('integrity' + currentBioConst));
-    const spentProof = Utils.to0x(await Utils.sha256Hex('spent' + segmentIndex));
-    const ownershipChangeCount = 0;
+// ---------- Segment (Micro-ledger) ----------
+const Segment = {
+  // Compute next integrity hash (chaining)
+  _nextHash: async (prevHash, event, timestamp, from, to, bioConst) => {
+    return await Utils.sha256Hex(prevHash + event + timestamp + from + to + bioConst);
+  },
 
+  // Initialize initial 1..1200 as UNLOCKED (ownershipChangeCount=1)
+  initializeSegments: async () => {
+    const now = Date.now();
+    for (let i = 1; i <= INITIAL_BALANCE_SHE; i++) {
+      const initHash = await Utils.sha256Hex('init' + i + vaultData.bioIBAN);
+      const unlockedTs = now + i; // stagger by i ms
+      const unlockHash = await Utils.sha256Hex(initHash + 'Unlock' + unlockedTs + 'Genesis' + vaultData.bioIBAN + (GENESIS_BIO_CONSTANT + i + 1));
+      const segment = {
+        segmentIndex: i,
+        currentOwner: vaultData.bioIBAN,
+        ownershipChangeCount: 1, // IMPORTANT for on-chain mint eligibility
+        claimed: false,          // used for TVM claims
+        history: [
+          {
+            event:'Initialization',
+            timestamp: now,
+            from:'Genesis',
+            to: vaultData.bioIBAN,
+            bioConst: GENESIS_BIO_CONSTANT + i,
+            integrityHash: initHash
+          },
+          {
+            event:'Unlock',
+            timestamp: unlockedTs,
+            from:'Genesis',
+            to: vaultData.bioIBAN,
+            bioConst: GENESIS_BIO_CONSTANT + i + 1,
+            integrityHash: unlockHash
+          }
+        ]
+      };
+      await DB.saveSegmentToDB(segment);
+    }
+    vaultData.balanceSHE = INITIAL_BALANCE_SHE;
+    vaultData.nextSegmentIndex = INITIAL_BALANCE_SHE + 1;
+  },
+
+  // Unlock the next N locked indices deterministically (1201..)
+  unlockNextSegments: async (count) => {
+    if (count <= 0) return 0;
+    if (!canUnlockSegments(count)) return 0;
+
+    let created = 0;
+    const now = Date.now();
+    for (let k = 0; k < count; k++) {
+      const idx = vaultData.nextSegmentIndex;
+      if (idx > LAYERS * SEGMENTS_PER_LAYER) break; // yearly hard cap
+      const initHash = await Utils.sha256Hex('init' + idx + vaultData.bioIBAN);
+      const ts = now + k;
+      const unlockHash = await Utils.sha256Hex(initHash + 'Unlock' + ts + 'Locked' + vaultData.bioIBAN + (GENESIS_BIO_CONSTANT + idx + 1));
+      const seg = {
+        segmentIndex: idx,
+        currentOwner: vaultData.bioIBAN,
+        ownershipChangeCount: 1, // newly unlocked -> 1 change
+        claimed: false,
+        history: [
+          { event:'Initialization', timestamp: ts, from:'Locked', to:vaultData.bioIBAN, bioConst: GENESIS_BIO_CONSTANT + idx, integrityHash: initHash },
+          { event:'Unlock', timestamp: ts, from:'Locked', to:vaultData.bioIBAN, bioConst: GENESIS_BIO_CONSTANT + idx + 1, integrityHash: unlockHash }
+        ]
+      };
+      await DB.saveSegmentToDB(seg);
+      vaultData.nextSegmentIndex = idx + 1;
+      created++;
+    }
+    if (created > 0) {
+      recordUnlock(created);
+      await Vault.updateBalanceFromSegments();
+      await persistVaultData();
+    }
+    return created;
+  },
+
+  // Validate a segment chain (used for P2P receive)
+  validateSegment: async (segment) => {
+    if (!segment || !Array.isArray(segment.history) || segment.history.length === 0) return false;
+    const init = segment.history[0];
+    const expectedInit = await Utils.sha256Hex('init' + segment.segmentIndex + init.to);
+    if (init.integrityHash !== expectedInit) return false;
+
+    let hash = init.integrityHash;
+    for (let j=1;j<segment.history.length;j++) {
+      const h = segment.history[j];
+      hash = await Utils.sha256Hex(hash + h.event + h.timestamp + h.from + h.to + h.bioConst);
+      if (h.integrityHash !== hash) return false;
+    }
+    const last = segment.history[segment.history.length - 1];
+    if (last.biometricZKP && !/^0x[0-9a-fA-F]{64}$/.test(last.biometricZKP)) return false;
+    return true;
+  }
+};
+
+// ---------- P2P helpers: compact/encrypt payload ----------
+function toCompactChains(chains) {
+  function eShort(e){ return e==='Transfer' ? 'T' : (e==='Received' ? 'R' : (e==='Unlock' ? 'U' : 'I')); }
+  var out = [];
+  for (var i=0;i<chains.length;i++){
+    var c = chains[i];
+    var h = [];
+    for (var j=0;j<c.history.length;j++){
+      var x = c.history[j];
+      h.push({ e: eShort(x.event), t: x.timestamp, f: x.from, o: x.to, b: x.bioConst, x: x.integrityHash, z: x.biometricZKP });
+    }
+    out.push({ i: c.segmentIndex, h: h });
+  }
+  return out;
+}
+function fromCompactChains(comp) {
+  function eLong(e){ return e==='T' ? 'Transfer' : (e==='R' ? 'Received' : (e==='U' ? 'Unlock' : 'Initialization')); }
+  var out = [];
+  for (var i=0;i<comp.length;i++){
+    var c = comp[i];
+    var h = [];
+    for (var j=0;j<c.h.length;j++){
+      var x = c.h[j];
+      h.push({ event: eLong(x.e), timestamp: x.t, from: x.f, to: x.o, bioConst: x.b, integrityHash: x.x, biometricZKP: x.z });
+    }
+    out.push({ segmentIndex: c.i, history: h });
+  }
+  return out;
+}
+// Derive transport key from from|to|nonce (transport privacy; both sides can derive)
+async function deriveP2PKey(from, to, nonce) {
+  const salt = Utils.enc.encode('BC-P2P|' + from + '|' + to + '|' + String(nonce));
+  const base = await crypto.subtle.importKey("raw", HMAC_KEY, "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name:"PBKDF2", salt: salt, iterations: 120000, hash:"SHA-256" },
+    base, { name:"AES-GCM", length: AES_KEY_LENGTH }, false, ["encrypt","decrypt"]
+  );
+}
+async function handleIncomingChains(chains, fromIBAN, toIBAN) {
+  var validSegments = 0;
+  for (var i=0;i<chains.length;i++) {
+    var entry = chains[i];
+    var seg = await DB.getSegment(entry.segmentIndex);
+    var reconstructed = seg ? JSON.parse(JSON.stringify(seg)) : { segmentIndex: entry.segmentIndex, currentOwner: 'Unknown', ownershipChangeCount: (seg && seg.ownershipChangeCount) || 0, claimed: false, history: [] };
+    for (var j=0;j<entry.history.length;j++) reconstructed.history.push(entry.history[j]);
+
+    if (!(await Segment.validateSegment(reconstructed))) continue;
+
+    const last = reconstructed.history[reconstructed.history.length - 1];
+    if (last.to !== vaultData.bioIBAN) continue;
+
+    const timestamp = Date.now();
+    const bioConst = last.bioConst + BIO_STEP;
+    const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Received' + timestamp + last.from + vaultData.bioIBAN + bioConst);
+    const zkpIn = await Biometric.generateBiometricZKP();
+    reconstructed.history.push({ event:'Received', timestamp: timestamp, from:last.from, to:vaultData.bioIBAN, bioConst: bioConst, integrityHash: integrityHash, biometricZKP: zkpIn });
+    reconstructed.currentOwner = vaultData.bioIBAN;
+    reconstructed.ownershipChangeCount = (reconstructed.ownershipChangeCount || 0) + 1;
+    reconstructed.claimed = reconstructed.claimed || false;
+    await DB.saveSegmentToDB(reconstructed);
+    validSegments++;
+  }
+  if (validSegments > 0) {
+    vaultData.transactions.push({ bioIBAN: vaultData.bioIBAN, bioCatch:'Incoming', amount: validSegments / EXCHANGE_RATE, timestamp: Date.now(), status:'Received' });
+    await Vault.updateBalanceFromSegments();
+    UI.showAlert('Received ' + validSegments + ' valid segments.');
+    await persistVaultData();
+  } else {
+    UI.showAlert('No valid segments received.');
+  }
+}
+
+// ---------- Proofs (on-chain TVM mint) ----------
+const Proofs = {
+  // Build proofs from actual local segments with ownershipChangeCount === 1 and not claimed
+  prepareClaimBatch: async (segmentsNeeded) => {
+    if (!vaultUnlocked) throw new Error('Vault locked.');
+    const segs = await DB.loadSegmentsFromDB();
+    // eligible for claim: owned by me, not claimed, exactly one ownership change (per rule)
+    const eligible = segs.filter(function(s){
+      return s.currentOwner === vaultData.bioIBAN && !s.claimed && Number(s.ownershipChangeCount||0) === 1;
+    });
+    if (eligible.length < segmentsNeeded) return { proofs: [], used: [] };
+
+    // choose first required indices (deterministic for UX)
+    const chosen = eligible.slice(0, segmentsNeeded).sort(function(a,b){ return a.segmentIndex - b.segmentIndex; });
     const biometricZKP = await Biometric.generateBiometricZKP();
     if (!biometricZKP) throw new Error('Biometric ZKP generation failed or was denied.');
 
-    autoProofs = [{ segmentIndex: segmentIndex, currentBioConst: currentBioConst, ownershipProof: ownershipProof, unlockIntegrityProof: unlockIntegrityProof, spentProof: spentProof, ownershipChangeCount: ownershipChangeCount, biometricZKP: biometricZKP }];
-    autoDeviceKeyHash = vaultData.deviceKeyHash;
-    autoUserBioConstant = currentBioConst;
-    autoNonce = Math.floor(Math.random() * 1000000);
-    autoSignature = await Proofs.signClaim(autoProofs, autoDeviceKeyHash, autoUserBioConstant, autoNonce);
-
-    await DB.saveProofsToDB({
-      proofs: autoProofs,
-      deviceKeyHash: autoDeviceKeyHash,
-      userBioConstant: autoUserBioConstant,
-      nonce: autoNonce,
-      signature: autoSignature
-    });
-    return true;
-  },
-
-  loadAutoProof: async () => {
-    const stored = await DB.loadProofsFromDB();
-    if (stored) {
-      autoProofs = stored.proofs;
-      autoDeviceKeyHash = stored.deviceKeyHash;
-      autoUserBioConstant = stored.userBioConstant;
-      autoNonce = stored.nonce;
-      autoSignature = stored.signature;
-    } else {
-      autoProofs = null; // generate lazily
-    }
-  },
-
-  signClaim: async (proofs, deviceKeyHash, userBioConstant, nonce) => {
     const coder = ethers.AbiCoder.defaultAbiCoder();
+
+    const proofs = [];
+    for (let i=0;i<chosen.length;i++){
+      const s = chosen[i];
+      const last = s.history[s.history.length - 1];
+      const baseStr = 'seg|' + s.segmentIndex + '|' + vaultData.bioIBAN + '|' + (s.ownershipChangeCount||1) + '|' + last.integrityHash + '|' + last.bioConst;
+      const ownershipProof        = Utils.to0x(await Utils.sha256Hex('own|'    + baseStr));
+      const unlockIntegrityProof  = Utils.to0x(await Utils.sha256Hex('unlock|' + baseStr));
+      const spentProof            = Utils.to0x(await Utils.sha256Hex('spent|'  + baseStr));
+
+      proofs.push({
+        segmentIndex: s.segmentIndex,
+        currentBioConst: last.bioConst,
+        ownershipProof: ownershipProof,
+        unlockIntegrityProof: unlockIntegrityProof,
+        spentProof: spentProof,
+        ownershipChangeCount: 1,
+        biometricZKP: biometricZKP
+      });
+    }
+
     const inner = proofs.map(function(p){
       return ethers.keccak256(coder.encode(
         ['uint256','uint256','bytes32','bytes32','bytes32','uint256','bytes32'],
@@ -709,7 +921,12 @@ const Proofs = {
       ));
     });
     const proofsHash = ethers.keccak256(coder.encode(['bytes32[]'], [inner]));
-    const domain = { name: 'TVM', version: '1', chainId: Number(chainId), verifyingContract: CONTRACT_ADDRESS.toLowerCase() };
+
+    const deviceKeyHash = vaultData.deviceKeyHash;
+    const userBioConstant = proofs[0] ? proofs[0].currentBioConst : vaultData.initialBioConstant;
+    const nonce = Math.floor(Math.random() * 1e9);
+
+    const domain = { name: 'TVM', version: '1', chainId: Number(chainId || EXPECTED_CHAIN_ID), verifyingContract: CONTRACT_ADDRESS.toLowerCase() };
     const types = { Claim: [
       { name: 'user', type: 'address' },
       { name: 'proofsHash', type: 'bytes32' },
@@ -718,7 +935,24 @@ const Proofs = {
       { name: 'nonce', type: 'uint256' }
     ]};
     const value = { user: account, proofsHash: proofsHash, deviceKeyHash: deviceKeyHash, userBioConstant: userBioConstant, nonce: nonce };
-    return signer.signTypedData(domain, types, value);
+    const signature = await signer.signTypedData(domain, types, value);
+
+    return { proofs, signature, deviceKeyHash, userBioConstant, nonce, used: chosen };
+  },
+
+  // After on-chain success, mark segments as claimed
+  markClaimed: async (segmentsUsed) => {
+    for (let i=0;i<segmentsUsed.length;i++){
+      const s = segmentsUsed[i];
+      s.claimed = true;
+      // Optional: append lightweight 'Claimed' event (does not affect count)
+      const last = s.history[s.history.length - 1];
+      const ts = Date.now();
+      const bio = last.bioConst + 1;
+      const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Claimed' + ts + vaultData.bioIBAN + 'OnChain' + bio);
+      s.history.push({ event:'Claimed', timestamp: ts, from:vaultData.bioIBAN, to:'OnChain', bioConst: bio, integrityHash });
+      await DB.saveSegmentToDB(s);
+    }
   }
 };
 
@@ -749,25 +983,45 @@ const ensureReady = () => {
 };
 
 const ContractInteractions = {
-  claimTVM: async () => {
+  claimTVM: async (tvmToClaim /* optional integer */) => {
     if (!ensureReady() || !tvmContract || typeof tvmContract.claimTVM !== 'function') {
       UI.showAlert('TVM contract not available on this network.'); return;
     }
     UI.showLoading('claim');
     try {
-      await Proofs.loadAutoProof();
-      if (!autoProofs) await Proofs.generateAutoProof();
+      // Determine segments needed (12 per TVM); default 1 TVM
+      const tvmAmount = Math.max(1, parseInt(tvmToClaim || 1, 10));
+      const needSeg = tvmAmount * SEGMENTS_PER_TVM;
 
+      const prep = await Proofs.prepareClaimBatch(needSeg);
+      if (!prep.proofs || prep.proofs.length !== needSeg) {
+        UI.showAlert('Not enough eligible segments (need ' + needSeg + ' with ownershipChangeCount=1).'); return;
+      }
+
+      // Yearly TVM cap guard (local mirror, contract is source of truth)
+      resetCapsIfNeeded(Date.now());
+      if (vaultData.caps.tvmYearlyClaimed + tvmAmount > YEARLY_CAP_TVM) {
+        UI.showAlert('Yearly TVM cap reached locally.'); return;
+      }
+
+      // Gas estimate
       var overrides = {};
       try {
-        var ge = await tvmContract.estimateGas.claimTVM(autoProofs, autoSignature, autoDeviceKeyHash, autoUserBioConstant, autoNonce);
+        var ge = await tvmContract.estimateGas.claimTVM(prep.proofs, prep.signature, prep.deviceKeyHash, prep.userBioConstant, prep.nonce);
         overrides.gasLimit = withBuffer(ge);
       } catch (e) { console.warn('estimateGas failed; sending without explicit gasLimit', e); }
 
-      const tx = await tvmContract.claimTVM(autoProofs, autoSignature, autoDeviceKeyHash, autoUserBioConstant, autoNonce, overrides);
+      const tx = await tvmContract.claimTVM(prep.proofs, prep.signature, prep.deviceKeyHash, prep.userBioConstant, prep.nonce, overrides);
       await tx.wait();
-      UI.showAlert('Claim successful.');
+
+      // Mark claimed locally and bump yearly TVM counter
+      await Proofs.markClaimed(prep.used);
+      vaultData.caps.tvmYearlyClaimed += tvmAmount;
+
+      UI.showAlert('Claim successful: ' + tvmAmount + ' TVM (' + needSeg + ' segments).');
       Wallet.updateBalances();
+
+      // Clear transient autoProofs cache (not used anymore)
       autoProofs = null;
     } catch (err) {
       console.error(err);
@@ -845,112 +1099,6 @@ const ContractInteractions = {
   }
 };
 
-// ---------- Segment (Micro-ledger) ----------
-const Segment = {
-  initializeSegments: async () => {
-    for (let i = 1; i <= INITIAL_BALANCE_SHE; i++) {
-      const segment = {
-        segmentIndex: i,
-        currentOwner: vaultData.bioIBAN,
-        history: [{
-          event:'Initialization',
-          timestamp: Date.now(),
-          from:'Genesis',
-          to: vaultData.bioIBAN,
-          bioConst: GENESIS_BIO_CONSTANT + i,
-          integrityHash: await Utils.sha256Hex('init' + i + vaultData.bioIBAN)
-        }]
-      };
-      await DB.saveSegmentToDB(segment);
-    }
-    vaultData.balanceSHE = INITIAL_BALANCE_SHE;
-  },
-  validateSegment: async (segment) => {
-    const init = segment.history[0];
-    const expectedInit = await Utils.sha256Hex('init' + segment.segmentIndex + init.to);
-    if (init.integrityHash !== expectedInit) return false;
-    let hash = init.integrityHash;
-    for (let j=1;j<segment.history.length;j++) {
-      const h = segment.history[j];
-      hash = await Utils.sha256Hex(hash + h.event + h.timestamp + h.from + h.to + h.bioConst);
-      if (h.integrityHash !== hash) return false;
-    }
-    const last = segment.history[segment.history.length - 1];
-    if (last.biometricZKP && !/^0x[0-9a-fA-F]{64}$/.test(last.biometricZKP)) return false;
-    return true;
-  }
-};
-
-// ---------- P2P helpers: compact/encrypt payload ----------
-function toCompactChains(chains) {
-  function eShort(e){ return e==='Transfer' ? 'T' : (e==='Received' ? 'R' : 'I'); }
-  var out = [];
-  for (var i=0;i<chains.length;i++){
-    var c = chains[i];
-    var h = [];
-    for (var j=0;j<c.history.length;j++){
-      var x = c.history[j];
-      h.push({ e: eShort(x.event), t: x.timestamp, f: x.from, o: x.to, b: x.bioConst, x: x.integrityHash, z: x.biometricZKP });
-    }
-    out.push({ i: c.segmentIndex, h: h });
-  }
-  return out;
-}
-function fromCompactChains(comp) {
-  function eLong(e){ return e==='T' ? 'Transfer' : (e==='R' ? 'Received' : 'Initialization'); }
-  var out = [];
-  for (var i=0;i<comp.length;i++){
-    var c = comp[i];
-    var h = [];
-    for (var j=0;j<c.h.length;j++){
-      var x = c.h[j];
-      h.push({ event: eLong(x.e), timestamp: x.t, from: x.f, to: x.o, bioConst: x.b, integrityHash: x.x, biometricZKP: x.z });
-    }
-    out.push({ segmentIndex: c.i, history: h });
-  }
-  return out;
-}
-// Derive transport key from from|to|nonce (transport privacy; both sides can derive)
-async function deriveP2PKey(from, to, nonce) {
-  const salt = Utils.enc.encode('BC-P2P|' + from + '|' + to + '|' + String(nonce));
-  const base = await crypto.subtle.importKey("raw", HMAC_KEY, "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    { name:"PBKDF2", salt: salt, iterations: 120000, hash:"SHA-256" },
-    base, { name:"AES-GCM", length: AES_KEY_LENGTH }, false, ["encrypt","decrypt"]
-  );
-}
-async function handleIncomingChains(chains, fromIBAN, toIBAN) {
-  var validSegments = 0;
-  for (var i=0;i<chains.length;i++) {
-    var entry = chains[i];
-    var seg = await DB.getSegment(entry.segmentIndex);
-    var reconstructed = seg ? JSON.parse(JSON.stringify(seg)) : { segmentIndex: entry.segmentIndex, currentOwner: 'Unknown', history: [] };
-    for (var j=0;j<entry.history.length;j++) reconstructed.history.push(entry.history[j]);
-
-    if (!(await Segment.validateSegment(reconstructed))) continue;
-
-    const last = reconstructed.history[reconstructed.history.length - 1];
-    if (last.to !== vaultData.bioIBAN) continue;
-
-    const timestamp = Date.now();
-    const bioConst = last.bioConst + BIO_STEP;
-    const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Received' + timestamp + last.from + vaultData.bioIBAN + bioConst);
-    const zkpIn = await Biometric.generateBiometricZKP();
-    reconstructed.history.push({ event:'Received', timestamp: timestamp, from:last.from, to:vaultData.bioIBAN, bioConst: bioConst, integrityHash: integrityHash, biometricZKP: zkpIn });
-    reconstructed.currentOwner = vaultData.bioIBAN;
-    await DB.saveSegmentToDB(reconstructed);
-    validSegments++;
-  }
-  if (validSegments > 0) {
-    vaultData.transactions.push({ bioIBAN: vaultData.bioIBAN, bioCatch:'Incoming', amount: validSegments / EXCHANGE_RATE, timestamp: Date.now(), status:'Received' });
-    await Vault.updateBalanceFromSegments();
-    UI.showAlert('Received ' + validSegments + ' valid segments.');
-    await persistVaultData();
-  } else {
-    UI.showAlert('No valid segments received.');
-  }
-}
-
 // ---------- P2P (modal-integrated) ----------
 const P2P = {
   // Core builder used by modal form
@@ -964,8 +1112,11 @@ const P2P = {
       if (amount > 300) return UI.showAlert('Amount exceeds per-transfer segment limit.');
 
       const segments = await DB.loadSegmentsFromDB();
-      const transferable = segments.filter(function(s){ return s.currentOwner === vaultData.bioIBAN; }).slice(0, amount);
-      if (transferable.length < amount) return UI.showAlert('Insufficient segments.');
+      // transferable: owned by me, UNLOCKED (we consider unlocked = ownershipChangeCount >= 1), not pending claim state
+      const transferable = segments
+        .filter(function(s){ return s.currentOwner === vaultData.bioIBAN && !s.claimed && Number(s.ownershipChangeCount||0) >= 1; })
+        .slice(0, amount);
+      if (transferable.length < amount) return UI.showAlert('Insufficient unlocked segments.');
 
       const zkp = await Biometric.generateBiometricZKP();
       if (!zkp) return UI.showAlert('Biometric ZKP generation failed.');
@@ -982,12 +1133,21 @@ const P2P = {
         const newHistory = { event:'Transfer', timestamp: timestamp, from:vaultData.bioIBAN, to:recipientIBAN, bioConst: bioConst, integrityHash: integrityHash, biometricZKP: zkp };
         s.history.push(newHistory);
         s.currentOwner = recipientIBAN;
+        s.ownershipChangeCount = (s.ownershipChangeCount || 0) + 1;
         await DB.saveSegmentToDB(s);
+        // include last ≤10 entries only
         chainsOut.push({ segmentIndex: s.segmentIndex, history: s.history.slice(-SEGMENT_HISTORY_MAX) });
       }
 
-      // Transaction journal + balances
+      // Transaction journal + balances (temporary decrease before auto-unlock)
       vaultData.transactions.push({ bioIBAN: vaultData.bioIBAN, bioCatch: 'Outgoing to ' + recipientIBAN, amount: amount / EXCHANGE_RATE, timestamp: Date.now(), status: 'Sent' });
+      await Vault.updateBalanceFromSegments();
+
+      // Auto-unlock equal amount if caps allow
+      const created = await Segment.unlockNextSegments(amount);
+      if (created < amount) {
+        UI.showAlert('Unlocked only '+created+' of '+amount+' due to caps. Balance may drop until caps reset.');
+      }
       await Vault.updateBalanceFromSegments();
       await persistVaultData();
 
@@ -1321,8 +1481,7 @@ async function showCatchOutResultModal(payloadStr) {
   var modalEl = document.getElementById('modalCatchOutResult');
   if (modalEl) {
     var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
-    if (m) m.show();
-    else modalEl.style.display = 'block';
+    if (m) m.show(); else modalEl.style.display = 'block';
   }
 }
 
