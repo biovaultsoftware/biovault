@@ -497,32 +497,35 @@ const Biometric = {
     }
   },
 
-  generateBiometricZKP: async () => {
-    if (!vaultData || !vaultData.credentialId) return null;
-    if (Biometric._bioBusy) return null;
-    Biometric._bioBusy = true;
-    try {
-      const challenge = Utils.rand(32);
-      const idBuf = Encryption.base64ToBuffer(vaultData.credentialId);
-      const assertion = await navigator.credentials.get({
-        publicKey: {
-          challenge: challenge,
-          allowCredentials: [{ type: "public-key", id: new Uint8Array(idBuf) }],
-          userVerification: "required",
-          timeout: 60000
-        }
-      });
-      if (!assertion) return null;
-      const hex = await Utils.sha256Hex(String.fromCharCode.apply(null, new Uint8Array(assertion.signature)));
-      return Utils.to0x(hex);
-    } catch (err) {
-      console.error('[BioVault] Biometric ZKP failed', err);
-      return null;
-    } finally {
-      Biometric._bioBusy = false;
-    }
+// Replace Biometric.generateBiometricZKP() body with:
+generateBiometricZKP: async () => {
+  if (!vaultData || !vaultData.credentialId) return null;
+  if (Biometric._bioBusy) return null;
+  Biometric._bioBusy = true;
+  try {
+    const challenge = Utils.rand(32);
+    const idBuf = Encryption.base64ToBuffer(vaultData.credentialId);
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        allowCredentials: [{ type: "public-key", id: new Uint8Array(idBuf) }],
+        userVerification: "required",
+        timeout: 60000
+      }
+    });
+    if (!assertion || !assertion.response || !assertion.response.signature) return null;
+    const sigU8 = new Uint8Array(assertion.response.signature);        // <-- raw bytes
+    const digest = await crypto.subtle.digest("SHA-256", sigU8);
+    const hex = Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,"0")).join("");
+    return "0x" + hex;
+  } catch (err) {
+    console.error('[BioVault] Biometric ZKP failed', err);
+    return null;
+  } finally {
+    Biometric._bioBusy = false;
   }
-};
+}
+
 
 async function reEnrollBiometricIfNeeded() {
   try {
