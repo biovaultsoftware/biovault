@@ -60,7 +60,8 @@ const SEGMENTS_PER_TVM = 12;
 const DAILY_CAP_TVM = 30;
 const MONTHLY_CAP_TVM = 300;
 const YEARLY_CAP_TVM = 900;
-const EXTRA_BONUS_TVM = 100;
+const EXTRA_BONUS_TVM = 100; // parity
+const MAX_YEARLY_TVM_TOTAL = YEARLY_CAP_TVM + EXTRA_BONUS_TVM;
 const MAX_PROOFS_LENGTH = 200;
 const SEGMENT_HISTORY_MAX = 10;
 const SEGMENT_PROOF_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("SegmentProof(uint256 segmentIndex,uint256 currentBioConst,bytes32 ownershipProof,bytes32 unlockIntegrityProof,bytes32 spentProof,uint256 ownershipChangeCount,bytes32 biometricZKP)"));
@@ -924,7 +925,7 @@ const Proofs = {
 
     const deviceKeyHash = vaultData.deviceKeyHash;
     const userBioConstant = proofs[0] ? proofs[0].currentBioConst : vaultData.initialBioConstant;
-    const nonce = Math.floor(Math.random() * 1e9);
+    const nonce = Math.floor(Math.random() * 1000000000);
 
     const domain = { name: 'TVM', version: '1', chainId: Number(chainId || EXPECTED_CHAIN_ID), verifyingContract: CONTRACT_ADDRESS.toLowerCase() };
     const types = { Claim: [
@@ -950,7 +951,7 @@ const Proofs = {
       const ts = Date.now();
       const bio = last.bioConst + 1;
       const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Claimed' + ts + vaultData.bioIBAN + 'OnChain' + bio);
-      s.history.push({ event:'Claimed', timestamp: ts, from:vaultData.bioIBAN, to:'OnChain', bioConst: bio, integrityHash });
+      s.history.push({ event:'Claimed', timestamp: ts, from:vaultData.bioIBAN, to:'OnChain', bioConst: bio, integrityHash: integrityHash });
       await DB.saveSegmentToDB(s);
     }
   }
@@ -1000,7 +1001,7 @@ const ContractInteractions = {
 
       // Yearly TVM cap guard (local mirror, contract is source of truth)
       resetCapsIfNeeded(Date.now());
-      if (vaultData.caps.tvmYearlyClaimed + tvmAmount > YEARLY_CAP_TVM) {
+      if (vaultData.caps.tvmYearlyClaimed + tvmAmount > MAX_YEARLY_TVM_TOTAL) {
         UI.showAlert('Yearly TVM cap reached locally.'); return;
       }
 
@@ -1023,6 +1024,7 @@ const ContractInteractions = {
 
       // Clear transient autoProofs cache (not used anymore)
       autoProofs = null;
+      await persistVaultData();
     } catch (err) {
       console.error(err);
       UI.showAlert('Error claiming TVM: ' + (err.reason || err.message || err));
@@ -1112,7 +1114,7 @@ const P2P = {
       if (amount > 300) return UI.showAlert('Amount exceeds per-transfer segment limit.');
 
       const segments = await DB.loadSegmentsFromDB();
-      // transferable: owned by me, UNLOCKED (we consider unlocked = ownershipChangeCount >= 1), not pending claim state
+      // transferable: owned by me, UNLOCKED (we consider unlocked = ownershipChangeCount >= 1), not claimed
       const transferable = segments
         .filter(function(s){ return s.currentOwner === vaultData.bioIBAN && !s.claimed && Number(s.ownershipChangeCount||0) >= 1; })
         .slice(0, amount);
@@ -1499,14 +1501,11 @@ async function showCatchOutResultModal(payloadStr) {
 
       // ---- Config ----
       const PORT = process.env.PORT || 3000;
-      // Increase if you expect bigger encrypted blobs
       const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || "25mb";
 
-      // If you're behind a proxy (Vercel/Render/Heroku/etc.)
       app.set("trust proxy", true);
 
       // ---- Middleware ----
-      // Accept JSON (strict), plus JSON-like vendor types
       app.use(
         express.json({
           limit: MAX_BODY_SIZE,
@@ -1514,8 +1513,6 @@ async function showCatchOutResultModal(payloadStr) {
           type: ["application/json", "application/*+json", "text/json"],
         })
       );
-
-      // Also accept raw text bodies; we’ll JSON.parse them ourselves
       app.use(
         express.text({
           limit: MAX_BODY_SIZE,
@@ -1529,17 +1526,10 @@ async function showCatchOutResultModal(payloadStr) {
       // ---- Helpers ----
       function parseMaybeJsonBody(req) {
         if (req.body == null) return { error: "EMPTY_BODY" };
-
-        if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
-          return { data: req.body };
-        }
+        if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) return { data: req.body };
         if (typeof req.body === "string") {
-          try {
-            const parsed = JSON.parse(req.body);
-            return { data: parsed };
-          } catch (e) {
-            return { error: "INVALID_JSON", detail: e.message };
-          }
+          try { return { data: JSON.parse(req.body) }; }
+          catch (e) { return { error: "INVALID_JSON", detail: e.message }; }
         }
         return { error: "UNSUPPORTED_BODY_TYPE" };
       }
@@ -1559,22 +1549,17 @@ async function showCatchOutResultModal(payloadStr) {
 
         if (parsed.error) {
           const status =
-            parsed.error === "EMPTY_BODY"
-              ? 400
-              : parsed.error === "INVALID_JSON"
-              ? 400
-              : parsed.error === "UNSUPPORTED_BODY_TYPE"
-              ? 415
-              : 400;
+            parsed.error === "EMPTY_BODY"      ? 400 :
+            parsed.error === "INVALID_JSON"    ? 400 :
+            parsed.error === "UNSUPPORTED_BODY_TYPE" ? 415 : 400;
 
           return res.status(status).json({
             ok: false,
             error: parsed.error,
             detail: parsed.detail || undefined,
-            hint:
-              parsed.error === "INVALID_JSON"
-                ? "Ensure the request body is JSON text (use JSON.stringify on the client) and Content-Type: application/json."
-                : undefined,
+            hint: parsed.error === "INVALID_JSON"
+              ? "Ensure the request body is JSON text (use JSON.stringify on the client) and Content-Type: application/json."
+              : undefined,
           });
         }
 
@@ -1646,11 +1631,80 @@ async function showCatchOutResultModal(payloadStr) {
         console.log(`JSON catcher listening on :${PORT} (limit: ${MAX_BODY_SIZE})`);
       });
     } catch (err) {
-      // If someone bundles this file and runs it in a partial environment, fail gracefully.
       console.error("[BioVault] Node server block failed to start:", err && err.message ? err.message : err);
     }
   }
 })();
+
+// ---------- Migrations (production-grade safety) ----------
+async function migrateSegmentsV4() {
+  const segs = await DB.loadSegmentsFromDB();
+  if (!segs || segs.length === 0) return;
+
+  let changed = 0;
+  for (let i=0;i<segs.length;i++){
+    let s = segs[i];
+    let mutated = false;
+
+    if (typeof s.claimed !== 'boolean') { s.claimed = false; mutated = true; }
+
+    if (typeof s.ownershipChangeCount !== 'number') {
+      // If an Unlock event exists, start from 1; else synthesize one for single-init segments.
+      var hasUnlock = false, transfers = 0, receiveds = 0;
+      for (var j=0;j<s.history.length;j++){
+        var ev = s.history[j].event;
+        if (ev === 'Unlock') hasUnlock = true;
+        if (ev === 'Transfer') transfers++;
+        if (ev === 'Received') receiveds++;
+      }
+      if (!hasUnlock && s.history.length === 1 && s.currentOwner === vaultData.bioIBAN) {
+        // synthesize Unlock immediately after init
+        var init = s.history[0];
+        var ts = (init.timestamp || Date.now()) + 1;
+        var unlockHash = await Utils.sha256Hex(init.integrityHash + 'Unlock' + ts + init.from + init.to + (init.bioConst + 1));
+        s.history.push({ event:'Unlock', timestamp: ts, from:init.from, to:init.to, bioConst: init.bioConst + 1, integrityHash: unlockHash });
+        hasUnlock = true;
+        mutated = true;
+      }
+      s.ownershipChangeCount = (hasUnlock ? 1 : 0) + transfers + receiveds;
+      if (s.ownershipChangeCount < 0) s.ownershipChangeCount = 0;
+      mutated = true;
+    }
+
+    if (mutated) { await DB.saveSegmentToDB(s); changed++; }
+  }
+
+  // Recompute nextSegmentIndex based on max existing index
+  var maxIdx = segs.reduce(function(m, s){ return s.segmentIndex > m ? s.segmentIndex : m; }, 0);
+  if (typeof vaultData.nextSegmentIndex !== 'number' || vaultData.nextSegmentIndex <= maxIdx) {
+    vaultData.nextSegmentIndex = maxIdx + 1;
+  }
+
+  if (changed > 0) {
+    await Vault.updateBalanceFromSegments();
+    await persistVaultData();
+  }
+}
+
+async function migrateVaultAfterDecrypt() {
+  // Ensure 0x Bio-IBAN + bonus
+  if (vaultData.bioIBAN && vaultData.bioIBAN.slice(0,2) !== '0x') vaultData.bioIBAN = '0x' + vaultData.bioIBAN;
+  if (typeof vaultData.bonusConstant !== 'number' || vaultData.bonusConstant <= 0) vaultData.bonusConstant = EXTRA_BONUS_TVM;
+
+  // Ensure caps object exists
+  if (!vaultData.caps) {
+    vaultData.caps = { dayKey:"", monthKey:"", yearKey:"", dayUsedSeg:0, monthUsedSeg:0, yearUsedSeg:0, tvmYearlyClaimed:0 };
+  }
+  resetCapsIfNeeded(Date.now());
+
+  // Ensure nextSegmentIndex sane
+  if (typeof vaultData.nextSegmentIndex !== 'number' || vaultData.nextSegmentIndex < INITIAL_BALANCE_SHE + 1) {
+    vaultData.nextSegmentIndex = INITIAL_BALANCE_SHE + 1;
+  }
+
+  // Migrate segments to V4 schema (adds Unlock for single-init ones, counts ownershipChangeCount, claimed)
+  await migrateSegmentsV4();
+}
 
 // ---------- Init ----------
 async function init() {
@@ -1688,20 +1742,8 @@ async function init() {
       derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || ''), salt);
       await persistVaultData(salt);
 
-      for (let i=1;i<=INITIAL_BALANCE_SHE;i++){
-        await DB.saveSegmentToDB({
-          segmentIndex: i,
-          currentOwner: vaultData.bioIBAN,
-          history: [{
-            event:'Initialization',
-            timestamp: Date.now(),
-            from:'Genesis',
-            to: vaultData.bioIBAN,
-            bioConst: GENESIS_BIO_CONSTANT + i,
-            integrityHash: await Utils.sha256Hex('init'+i+vaultData.bioIBAN)
-          }]
-        });
-      }
+      // Create initial unlocked base (1..1200) using new rules
+      await Segment.initializeSegments();
 
       vaultUnlocked = true;
       revealVaultUI();
@@ -1730,13 +1772,8 @@ async function init() {
     try {
       vaultData = await Encryption.decryptData(derivedKey, stored.iv, stored.ciphertext);
 
-      // Migrations: ensure 0x Bio-IBAN + bonusConstant populated
-      if (vaultData.bioIBAN && vaultData.bioIBAN.slice(0,2) !== '0x') {
-        vaultData.bioIBAN = '0x' + vaultData.bioIBAN;
-      }
-      if (typeof vaultData.bonusConstant !== 'number' || vaultData.bonusConstant <= 0) {
-        vaultData.bonusConstant = EXTRA_BONUS_TVM;
-      }
+      // Run robust migrations for V4 schema
+      await migrateVaultAfterDecrypt();
       await persistVaultData();
 
       let ok = await Biometric.performBiometricAssertion(vaultData.credentialId);
