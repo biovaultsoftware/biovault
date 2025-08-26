@@ -187,7 +187,34 @@ const Utils = {
     return Utils.toB64(signature);
   },
   sanitizeInput: function (input) { return (typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(input) : String(input)); },
-  to0x: function (hex) { return hex && hex.slice(0,2)==='0x' ? hex : ('0x' + hex); }
+  to0x: function (hex) { return hex && hex.slice(0,2)==='0x' ? hex : ('0x' + hex); },
+  hexToBytes: function (hex) { // NOTE: Added helper to convert 0xhex to Uint8Array for ZKP binary
+    let bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    return bytes;
+  },
+  toVarInt: function (num) { // NOTE: Added LEB128 varint encoder for binary payload compaction
+    const buf = [];
+    do {
+      let b = num & 0x7f;
+      num = Math.floor(num / 128);
+      if (num > 0) b |= 0x80;
+      buf.push(b);
+    } while (num > 0);
+    return new Uint8Array(buf);
+  },
+  readVarInt: function (dv, off) { // NOTE: Added LEB128 varint decoder for binary payload parsing
+    let val = 0, shift = 0;
+    while (true) {
+      const b = dv.getUint8(off.offset++);
+      val += (b & 0x7f) << shift;
+      shift += 7;
+      if ((b & 0x80) === 0) break;
+    }
+    return val;
+  }
 };
 
 // ---------- Script Loader (QR + JSZip + Chart.js) ----------
@@ -223,17 +250,17 @@ async function ensureChartLib() {
 
 // ---------- Encryption ----------
 const Encryption = {
-  encryptData: async (key, dataObj, additionalData = null) => { // NOTE: Added optional additionalData for AAD in AES-GCM to authenticate header.
+  encryptData: async (key, dataObj, aad = null) => { // NOTE: Updated to support AAD for authenticated headers in P2P payloads
     const iv = Utils.rand(12);
     const plaintext = Utils.enc.encode(JSON.stringify(dataObj));
     const params = { name:'AES-GCM', iv };
-    if (additionalData) params.additionalData = Utils.enc.encode(additionalData); // NOTE: Encode AAD if provided.
+    if (aad) params.additionalData = Utils.enc.encode(aad);
     const ciphertext = await crypto.subtle.encrypt(params, key, plaintext);
     return { iv: iv, ciphertext: ciphertext };
   },
-  decryptData: async (key, iv, ciphertext, additionalData = null) => { // NOTE: Added optional additionalData for AAD in decryption.
+  decryptData: async (key, iv, ciphertext, aad = null) => { // NOTE: Updated to support AAD for authenticated headers in P2P payloads
     const params = { name:'AES-GCM', iv };
-    if (additionalData) params.additionalData = Utils.enc.encode(additionalData); // NOTE: Encode AAD if provided.
+    if (aad) params.additionalData = Utils.enc.encode(aad);
     const plainBuf = await crypto.subtle.decrypt(params, key, ciphertext);
     return JSON.parse(Utils.dec.decode(plainBuf));
   },
@@ -248,6 +275,20 @@ const Encryption = {
     const bin = atob(b64); const out = new Uint8Array(bin.length);
     for (let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
     return out.buffer;
+  },
+  compressGzip: async (data) => { // NOTE: Added gzip compression for binary payloads to achieve <50MB for 1M segments
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    writer.write(data);
+    await writer.close();
+    return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  },
+  decompressGzip: async (data) => { // NOTE: Added gzip decompression for binary payloads
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    writer.write(data);
+    await writer.close();
+    return new Uint8Array(await new Response(ds.readable).arrayBuffer());
   }
 };
 
@@ -577,7 +618,7 @@ const Vault = {
     const segs = await DB.loadSegmentsFromDB();
     vaultData.balanceSHE = segs.filter(function(s){ return s.currentOwner===vaultData.bioIBAN; }).length;
     Vault.updateVaultUI();
-  },
+  }
 };
 
 // ---------- Network/Contract guards ----------
@@ -727,6 +768,8 @@ const Segment = {
       const segment = {
         segmentIndex: i,
         currentOwner: vaultData.bioIBAN,
+        previousOwner: vaultData.bioIBAN, // NOTE: Added previousOwner per updated ownership model (vault_owner as previous on mint)
+        originalOwner: vaultData.bioIBAN, // NOTE: Added originalOwner per updated ownership model (vault_owner as original on mint)
         ownershipChangeCount: 1, // IMPORTANT for on-chain mint eligibility
         claimed: false,          // used for TVM claims
         history: [
@@ -770,6 +813,8 @@ const Segment = {
       const seg = {
         segmentIndex: idx,
         currentOwner: vaultData.bioIBAN,
+        previousOwner: vaultData.bioIBAN, // NOTE: Added previousOwner for new unlocks (matches mint rules)
+        originalOwner: vaultData.bioIBAN, // NOTE: Added originalOwner for new unlocks (matches mint rules)
         ownershipChangeCount: 1, // newly unlocked -> 1 change
         claimed: false,
         history: [
@@ -804,12 +849,41 @@ const Segment = {
     }
     const last = segment.history[segment.history.length - 1];
     if (last.biometricZKP && !/^0x[0-9a-fA-F]{64}$/.test(last.biometricZKP)) return false;
+    if (segment.currentOwner !== last.to) return false; // NOTE: Added check for immutability (current_owner matches last to)
     return true;
   }
 };
 
 // ---------- P2P helpers: compact/encrypt payload ----------
-// NOTE: Removed toCompactChains and fromCompactChains as they are replaced by binary range-packed format.
+function toCompactChains(chains) {
+  function eShort(e){ return e==='Transfer' ? 'T' : (e==='Received' ? 'R' : (e==='Unlock' ? 'U' : 'I')); }
+  var out = [];
+  for (var i=0;i<chains.length;i++){
+    var c = chains[i];
+    var h = [];
+    for (var j=0;j<c.history.length;j++){
+      var x = c.history[j];
+      h.push({ e: eShort(x.event), t: x.timestamp, f: x.from, o: x.to, b: x.bioConst, x: x.integrityHash, z: x.biometricZKP });
+    }
+    out.push({ i: c.segmentIndex, h: h });
+  }
+  return out;
+}
+function fromCompactChains(comp) {
+  function eLong(e){ return e==='T' ? 'Transfer' : (e==='R' ? 'Received' : (e==='U' ? 'Unlock' : 'Initialization')); }
+  var out = [];
+  for (var i=0;i<comp.length;i++){
+    var c = comp[i];
+    var h = [];
+    for (var j=0;j<c.h.length;j++){
+      var x = c.h[j];
+      h.push({ event: eLong(x.e), timestamp: x.t, from: x.f, to: x.o, bioConst: x.b, integrityHash: x.x, biometricZKP: x.z });
+    }
+    out.push({ segmentIndex: c.i, history: h });
+  }
+  return out;
+}
+// Derive transport key from from|to|nonce (transport privacy; both sides can derive)
 async function deriveP2PKey(from, to, nonce) {
   const salt = Utils.enc.encode('BC-P2P|' + from + '|' + to + '|' + String(nonce));
   const base = await crypto.subtle.importKey("raw", HMAC_KEY, "PBKDF2", false, ["deriveKey"]);
@@ -818,46 +892,12 @@ async function deriveP2PKey(from, to, nonce) {
     base, { name:"AES-GCM", length: AES_KEY_LENGTH }, false, ["encrypt","decrypt"]
   );
 }
-// NOTE: Added varint encode/decode for binary packing.
-function encodeVarint(n) {
-  const out = [];
-  n = Number(n); // Ensure number
-  while (n > 127) {
-    out.push((n & 127) | 128);
-    n = Math.floor(n / 128); // NOTE: Use floor for shift.
-  }
-  out.push(n);
-  return new Uint8Array(out);
-}
-function decodeVarint(buf, offset = 0) {
-  let res = 0, shift = 0;
-  while (true) {
-    const b = buf[offset++];
-    res |= (b & 127) << shift;
-    shift += 7;
-    if ((b & 128) === 0) break;
-    if (shift > 53) throw new Error('Varint overflow'); // NOTE: Safety for large numbers.
-  }
-  return { value: res, next: offset };
-}
-// NOTE: Added concat for Uint8Array parts.
-function concatUint8Arrays(arrays) {
-  let totalLen = arrays.reduce((sum, a) => sum + a.length, 0);
-  let res = new Uint8Array(totalLen);
-  let pos = 0;
-  for (let a of arrays) {
-    res.set(a, pos);
-    pos += a.length;
-  }
-  return res;
-}
-// NOTE: Updated handleIncomingChains to support reconstructed chains from binary.
 async function handleIncomingChains(chains, fromIBAN, toIBAN) {
   var validSegments = 0;
   for (var i=0;i<chains.length;i++) {
     var entry = chains[i];
     var seg = await DB.getSegment(entry.segmentIndex);
-    var reconstructed = seg ? JSON.parse(JSON.stringify(seg)) : { segmentIndex: entry.segmentIndex, currentOwner: 'Unknown', ownershipChangeCount: (seg && seg.ownershipChangeCount) || 0, claimed: false, history: [] };
+    var reconstructed = seg ? JSON.parse(JSON.stringify(seg)) : { segmentIndex: entry.segmentIndex, currentOwner: 'Unknown', previousOwner: 'Unknown', originalOwner: 'Unknown', ownershipChangeCount: (seg && seg.ownershipChangeCount) || 0, claimed: false, history: [] }; // NOTE: Added previousOwner and originalOwner to reconstructed segment
     for (var j=0;j<entry.history.length;j++) reconstructed.history.push(entry.history[j]);
 
     if (!(await Segment.validateSegment(reconstructed))) continue;
@@ -871,6 +911,8 @@ async function handleIncomingChains(chains, fromIBAN, toIBAN) {
     const zkpIn = await Biometric.generateBiometricZKP();
     reconstructed.history.push({ event:'Received', timestamp: timestamp, from:last.from, to:vaultData.bioIBAN, bioConst: bioConst, integrityHash: integrityHash, biometricZKP: zkpIn });
     reconstructed.currentOwner = vaultData.bioIBAN;
+    reconstructed.previousOwner = last.from; // NOTE: Updated to set previousOwner to sender on receive (per P2P transfer rules)
+    reconstructed.originalOwner = reconstructed.originalOwner || last.from; // NOTE: Set originalOwner if not present (fallback to sender for fresh segments)
     reconstructed.ownershipChangeCount = (reconstructed.ownershipChangeCount || 0) + 1;
     reconstructed.claimed = reconstructed.claimed || false;
     await DB.saveSegmentToDB(reconstructed);
@@ -878,6 +920,93 @@ async function handleIncomingChains(chains, fromIBAN, toIBAN) {
   }
   if (validSegments > 0) {
     vaultData.transactions.push({ bioIBAN: vaultData.bioIBAN, bioCatch:'Incoming', amount: validSegments / EXCHANGE_RATE, timestamp: Date.now(), status:'Received' });
+    await Vault.updateBalanceFromSegments();
+    UI.showAlert('Received ' + validSegments + ' valid segments.');
+    await persistVaultData();
+  } else {
+    UI.showAlert('No valid segments received.');
+  }
+}
+async function handleIncomingBinary(plainBuf, fromIBAN, toIBAN, envelope) { // NOTE: Added new handler for v3 binary compacted payloads (reconstructs segments from minimal data)
+  const dv = new DataView(plainBuf);
+  const off = { offset: 0 };
+  const flags = dv.getUint8(off.offset++); // Currently reserved
+  const transferTs = Utils.readVarInt(dv, off);
+  const zkpBytes = new Uint8Array(plainBuf.slice(off.offset, off.offset + 32));
+  off.offset += 32;
+  const zkp = '0x' + Array.from(zkpBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  const noteLen = Utils.readVarInt(dv, off);
+  const note = Utils.dec.decode(plainBuf.slice(off.offset, off.offset + noteLen));
+  off.offset += noteLen;
+
+  const segments = [];
+  while (off.offset < dv.byteLength) {
+    const type = dv.getUint8(off.offset++);
+    if (type === 0) break; // End marker if used
+    if (type === 1) { // Per-segment
+      const idx = Utils.readVarInt(dv, off);
+      const unlockTs = Utils.readVarInt(dv, off);
+      const fl = dv.getUint8(off.offset++);
+      const origin = (fl & 1) ? 'Locked' : 'Genesis';
+      segments.push({ idx, unlockTs, origin });
+    } else if (type === 2) { // Range
+      const start = Utils.readVarInt(dv, off);
+      const count = Utils.readVarInt(dv, off);
+      const tsStart = Utils.readVarInt(dv, off);
+      const step = Utils.readVarInt(dv, off);
+      const fl = dv.getUint8(off.offset++);
+      const origin = (fl & 1) ? 'Locked' : 'Genesis';
+      for (let k = 0; k < count; k++) {
+        segments.push({ idx: start + k, unlockTs: tsStart + k * step, origin });
+      }
+    } // Ignore unknown types
+  }
+
+  let validSegments = 0;
+  for (const seg of segments) {
+    const idx = seg.idx;
+    const origin = seg.origin;
+    const unlockTs = seg.unlockTs;
+
+    const initBio = GENESIS_BIO_CONSTANT + idx;
+    const initHash = await Utils.sha256Hex('init' + idx + fromIBAN);
+    const unlockBio = initBio + 1;
+    const unlockHash = await Utils.sha256Hex(initHash + 'Unlock' + unlockTs + origin + fromIBAN + unlockBio);
+    const transferBio = unlockBio + 1;
+    const transferHash = await Utils.sha256Hex(unlockHash + 'Transfer' + transferTs + fromIBAN + toIBAN + transferBio);
+
+    const history = [
+      { event: 'Initialization', timestamp: unlockTs, from: origin, to: fromIBAN, bioConst: initBio, integrityHash: initHash },
+      { event: 'Unlock', timestamp: unlockTs, from: origin, to: fromIBAN, bioConst: unlockBio, integrityHash: unlockHash },
+      { event: 'Transfer', timestamp: transferTs, from: fromIBAN, to: toIBAN, bioConst: transferBio, integrityHash: transferHash, biometricZKP: zkp }
+    ];
+
+    const reconstructed = {
+      segmentIndex: idx,
+      currentOwner: toIBAN,
+      previousOwner: fromIBAN, // NOTE: Set previousOwner to sender for reconstructed fresh segments
+      originalOwner: fromIBAN, // NOTE: Set originalOwner to sender for reconstructed fresh segments (assumes mint-like)
+      ownershipChangeCount: 1, // Assumes fresh (count=1 after transfer)
+      claimed: false,
+      history
+    };
+
+    if (!(await Segment.validateSegment(reconstructed))) continue;
+
+    const last = reconstructed.history[reconstructed.history.length - 1];
+    const timestamp = Date.now();
+    const bioConst = last.bioConst + BIO_STEP;
+    const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Received' + timestamp + last.from + toIBAN + bioConst);
+    const zkpIn = await Biometric.generateBiometricZKP();
+    reconstructed.history.push({ event: 'Received', timestamp, from: last.from, to: toIBAN, bioConst, integrityHash, biometricZKP: zkpIn });
+    reconstructed.ownershipChangeCount += 1;
+    reconstructed.previousOwner = last.from; // NOTE: Reaffirm previousOwner on receive
+    await DB.saveSegmentToDB(reconstructed);
+    validSegments++;
+  }
+
+  if (validSegments > 0) {
+    vaultData.transactions.push({ bioIBAN: vaultData.bioIBAN, bioCatch: 'Incoming', amount: validSegments / EXCHANGE_RATE, timestamp: Date.now(), status: 'Received' });
     await Vault.updateBalanceFromSegments();
     UI.showAlert('Received ' + validSegments + ' valid segments.');
     await persistVaultData();
@@ -1121,13 +1250,12 @@ const P2P = {
       if (!vaultUnlocked) return UI.showAlert('Vault locked.');
       const amount = parseInt(amountSegments, 10);
       if (isNaN(amount) || amount <= 0 || amount > vaultData.balanceSHE) return UI.showAlert('Invalid amount.');
-      if (amount > 300) return UI.showAlert('Amount exceeds per-transfer segment limit.');
+      // NOTE: Removed 300 limit to support large batches (up to 1M segments) with compacted binary
 
       const segments = await DB.loadSegmentsFromDB();
       // transferable: owned by me, UNLOCKED (we consider unlocked = ownershipChangeCount >= 1), not claimed
       const transferable = segments
         .filter(function(s){ return s.currentOwner === vaultData.bioIBAN && !s.claimed && Number(s.ownershipChangeCount||0) >= 1; })
-        .sort((a,b) => a.segmentIndex - b.segmentIndex) // NOTE: Sort by index ascending to enable better range compression.
         .slice(0, amount);
       if (transferable.length < amount) return UI.showAlert('Insufficient unlocked segments.');
 
@@ -1137,15 +1265,18 @@ const P2P = {
       var header = { from: vaultData.bioIBAN, to: recipientIBAN, nonce: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random()) };
       var chainsOut = [];
 
-      const timestamp = Date.now(); // NOTE: Use single timestamp for all transfers in batch for compactness (all "now").
+      const transferTs = Date.now(); // NOTE: Moved transferTs to single value for all (enables compaction)
 
       for (let k=0;k<transferable.length;k++) {
         const s = transferable[k];
+        if (s.currentOwner !== vaultData.bioIBAN) continue; // NOTE: Explicit check sender is current owner (immutability rule)
         const last = s.history[s.history.length - 1];
+        const timestamp = transferTs;
         const bioConst = last.bioConst + BIO_STEP;
         const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Transfer' + timestamp + vaultData.bioIBAN + recipientIBAN + bioConst);
         const newHistory = { event:'Transfer', timestamp: timestamp, from:vaultData.bioIBAN, to:recipientIBAN, bioConst: bioConst, integrityHash: integrityHash, biometricZKP: zkp };
         s.history.push(newHistory);
+        s.previousOwner = s.currentOwner; // NOTE: Set previousOwner to sender on transfer
         s.currentOwner = recipientIBAN;
         s.ownershipChangeCount = (s.ownershipChangeCount || 0) + 1;
         await DB.saveSegmentToDB(s);
@@ -1165,94 +1296,97 @@ const P2P = {
       await Vault.updateBalanceFromSegments();
       await persistVaultData();
 
-      // NOTE: New v3 binary range-packed compact payload instead of JSON chains (per proposal layout B for ultra-compact).
-      // Build ranges from sorted transferable.
-      let groups = [];
-      let currentRun = null;
-      for (let s of transferable) {
-        const idx = s.segmentIndex;
-        const unlockEvent = s.history.find(h => h.event === 'Unlock');
-        if (!unlockEvent) throw new Error('Missing Unlock event');
-        const uts = unlockEvent.timestamp;
-        const origin = s.history[0].event === 'Initialization' ? s.history[0].from : 'Genesis'; // NOTE: Safeguard for origin.
-        if (!currentRun) {
-          currentRun = {start: idx, count: 1, unlockStart: uts, step: 0, origin};
-        } else if (idx === currentRun.start + currentRun.count && origin === currentRun.origin) {
-          const newStep = uts - (currentRun.unlockStart + currentRun.step * (currentRun.count - 1));
-          if (currentRun.count === 1) {
-            currentRun.step = newStep;
+      // NOTE: Updated to use v3 binary compacted payload if all segments are fresh (ownershipChangeCount===1), else fallback to v2 JSON; enables <50MB for 1M segments
+      const allFresh = transferable.every(s => s.ownershipChangeCount === 2); // After transfer, count=2 if was 1
+      const v = allFresh ? 3 : 2;
+      const aad = Utils.canonical({ v, from: header.from, to: header.to, nonce: header.nonce }); // NOTE: Added AAD for authenticated headers (security note)
+
+      const p2pKey = await deriveP2PKey(header.from, header.to, header.nonce);
+      let enc;
+      if (v === 3) {
+        // Build binary (layout A per-segment for simplicity; extend to ranges for ultra-compact)
+        transferable.sort((a, b) => a.segmentIndex - b.segmentIndex);
+        let parts = [];
+        parts.push(new Uint8Array([0])); // flags
+        parts.push(Utils.toVarInt(transferTs));
+        parts.push(Utils.hexToBytes(zkp.slice(2))); // 32 bytes ZKP
+        const noteBytes = Utils.enc.encode(note || '');
+        parts.push(Utils.toVarInt(noteBytes.length));
+        parts.push(noteBytes);
+
+        // Check for range eligibility
+        let canRange = transferable.length > 1;
+        let step = 0;
+        let firstOrigin = -1;
+        for (let k = 1; k < transferable.length; k++) {
+          if (transferable[k].segmentIndex !== transferable[k - 1].segmentIndex + 1) {
+            canRange = false;
+            break;
           }
-          if (newStep === currentRun.step) {
-            currentRun.count++;
-          } else {
-            groups.push(currentRun);
-            currentRun = {start: idx, count: 1, unlockStart: uts, step: 0, origin};
+          const tsDiff = transferable[k].history.find(h => h.event === 'Unlock').timestamp - transferable[k - 1].history.find(h => h.event === 'Unlock').timestamp;
+          const org = transferable[k].history[0].from === 'Genesis' ? 0 : 1;
+          if (k === 1) {
+            step = tsDiff;
+            firstOrigin = transferable[0].history[0].from === 'Genesis' ? 0 : 1;
+          } else if (tsDiff !== step || org !== firstOrigin) {
+            canRange = false;
+            break;
           }
+        }
+
+        if (canRange) {
+          // Use single range (type 2)
+          parts.push(new Uint8Array([2])); // type range
+          parts.push(Utils.toVarInt(transferable[0].segmentIndex));
+          parts.push(Utils.toVarInt(transferable.length));
+          parts.push(Utils.toVarInt(transferable[0].history.find(h => h.event === 'Unlock').timestamp));
+          parts.push(Utils.toVarInt(step));
+          parts.push(new Uint8Array([firstOrigin]));
         } else {
-          groups.push(currentRun);
-          currentRun = {start: idx, count: 1, unlockStart: uts, step: 0, origin};
+          // Per-segment (type 1)
+          for (const s of transferable) {
+            const unlock = s.history.find(h => h.event === 'Unlock');
+            const ts = unlock.timestamp;
+            const originFl = s.history[0].from === 'Genesis' ? 0 : 1;
+            parts.push(new Uint8Array([1])); // type per
+            parts.push(Utils.toVarInt(s.segmentIndex));
+            parts.push(Utils.toVarInt(ts));
+            parts.push(new Uint8Array([originFl]));
+          }
         }
-      }
-      if (currentRun) groups.push(currentRun);
 
-      // Build binary: flags (bit0:1 ranges, bit1:0 no gzip here - set via envelope.cmp)
-      let parts = [];
-      let flags = 1; // bit0=1 for ranges mode (preferred).
-      parts.push(new Uint8Array([flags]));
-      parts.push(encodeVarint(timestamp)); // transferTs full ms varint.
-      parts.push(ethers.utils.arrayify(zkp)); // 32 bytes ZKP.
-      parts.push(encodeVarint(groups.length)); // numRanges varint.
-
-      for (let g of groups) {
-        parts.push(encodeVarint(g.start));
-        parts.push(encodeVarint(g.count));
-        parts.push(encodeVarint(g.unlockStart));
-        parts.push(encodeVarint(g.step));
-        const originFlag = g.origin === 'Locked' ? 1 : 0;
-        parts.push(new Uint8Array([originFlag]));
-      }
-
-      let flat = concatUint8Arrays(parts);
-
-      // Compress if available (gzip).
-      let useCompress = typeof CompressionStream !== 'undefined';
-      let compressedFlat = flat;
-      if (useCompress) {
-        const cs = new CompressionStream('gzip');
-        const writer = cs.writable.getWriter();
-        await writer.write(flat);
-        await writer.close();
-        const reader = cs.readable.getReader();
-        let chunks = [];
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          chunks.push(value);
+        let plainLen = parts.reduce((acc, p) => acc + p.length, 0);
+        let plainBuf = new Uint8Array(plainLen);
+        let pos = 0;
+        for (const p of parts) {
+          plainBuf.set(p, pos);
+          pos += p.length;
         }
-        compressedFlat = concatUint8Arrays(chunks);
-      }
 
-      // Encrypt with AAD = header JSON.
-      var p2pKey = await deriveP2PKey(header.from, header.to, header.nonce);
-      const aad = JSON.stringify({v: 3, from: header.from, to: header.to, nonce: header.nonce}); // NOTE: AAD authenticates header (per proposal).
-      var enc = await Encryption.encryptData(p2pKey, {}, aad); // NOTE: Empty dataObj since binary in ct, but wait, no: encrypt the compressedFlat as plaintext, but encryptData expects obj, stringify.
-      // NOTE: Update: encrypt raw buffer instead of JSON obj.
-      // Temporary override: await crypto.subtle.encrypt({name:'AES-GCM', iv: iv, additionalData: Utils.enc.encode(aad)}, p2pKey, compressedFlat)
-      const iv = Utils.rand(12);
-      const params = { name: 'AES-GCM', iv, additionalData: Utils.enc.encode(aad) };
-      const ciphertext = await crypto.subtle.encrypt(params, p2pKey, compressedFlat);
-      enc = { iv, ciphertext };
+        const compressed = await Encryption.compressGzip(plainBuf); // NOTE: Compress before encrypt (security note)
+        enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: Utils.rand(12), additionalData: Utils.enc.encode(aad) }, p2pKey, compressed); // NOTE: Use AAD and compress
+      } else {
+        // Fallback v2 JSON
+        var chainsOutCompact = toCompactChains(chainsOut);
+        enc = await Encryption.encryptData(p2pKey, { n: note || '', c: chainsOutCompact, t: Date.now() }, aad); // NOTE: Added AAD to v2 as well for consistency
+      }
 
       var payload = {
-        v: 3,
+        v,
         from: header.from,
         to: header.to,
         nonce: header.nonce,
-        iv: Encryption.bufferToBase64(enc.iv),
-        ct: Encryption.bufferToBase64(enc.ciphertext)
+        iv: Encryption.bufferToBase64(enc.iv ? enc.iv : Utils.rand(12)), // NOTE: Ensure iv always present
+        ct: Encryption.bufferToBase64(enc)
       };
-      if (note) payload.note = note; // NOTE: Optional note in plaintext (avoids compression side-channels).
-      if (useCompress) payload.cmp = 'gzip';// NOTE: Indicate compression for receiver.
+
+      // NOTE: Added optional EOA signature of AAD for sender authenticity (security note)
+      if (account && signer) {
+        const aadBytes = Utils.enc.encode(aad);
+        const msgHash = ethers.keccak256(aadBytes);
+        payload.eoa = account;
+        payload.sig = await signer.signMessage(ethers.getBytes(msgHash));
+      }
 
       // Store for modal result rendering
       lastCatchOutPayload = payload;
@@ -1283,88 +1417,33 @@ const P2P = {
       if (await DB.hasReplayNonce(envelope.nonce)) return UI.showAlert('Duplicate transfer detected (replay).');
       await DB.putReplayNonce(envelope.nonce);
 
-      if (envelope.v === 3 && envelope.iv && envelope.ct) { // NOTE: New v3 binary compressed path.
-        var p2pKey = await deriveP2PKey(envelope.from, envelope.to, envelope.nonce);
-        const aad = JSON.stringify({v: 3, from: envelope.from, to: envelope.to, nonce: envelope.nonce}); // NOTE: AAD for header auth.
+      const aad = Utils.canonical({ v: envelope.v, from: envelope.from, to: envelope.to, nonce: envelope.nonce }); // NOTE: Compute AAD for verification/decryption
+
+      // NOTE: Added optional signature verification if eoa and sig present (security note)
+      if (envelope.eoa && envelope.sig) {
+        const aadBytes = Utils.enc.encode(aad);
+        const msgHash = ethers.keccak256(aadBytes);
+        const recovered = ethers.verifyMessage(ethers.getBytes(msgHash), envelope.sig);
+        if (recovered.toLowerCase() !== envelope.eoa.toLowerCase()) {
+          return UI.showAlert('Invalid sender signature.');
+        }
+      }
+
+      const p2pKey = await deriveP2PKey(envelope.from, envelope.to, envelope.nonce);
+
+      if (envelope.v === 3 && envelope.iv && envelope.ct) { // NOTE: Added support for v3 binary compacted payloads
         const ivBuf = Encryption.base64ToBuffer(envelope.iv);
         const ctBuf = Encryption.base64ToBuffer(envelope.ct);
-        const params = { name: 'AES-GCM', iv: ivBuf, additionalData: Utils.enc.encode(aad) };
-        let plainBuf = await crypto.subtle.decrypt(params, p2pKey, ctBuf); // NOTE: Direct decrypt to buffer (no JSON parse).
-
-        // Decompress if indicated.
-        if (envelope.cmp === 'gzip') {
-          if (typeof DecompressionStream === 'undefined') throw new Error('Decompression not supported.');
-          const ds = new DecompressionStream('gzip');
-          const writer = ds.writable.getWriter();
-          await writer.write(new Uint8Array(plainBuf));
-          await writer.close();
-          const reader = ds.readable.getReader();
-          let decompressed = [];
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            decompressed.push(value);
-          }
-          plainBuf = concatUint8Arrays(decompressed).buffer;
-        }
-        let buf = new Uint8Array(plainBuf);
-
-        // Parse binary.
-        let offset = 0;
-        const flags = buf[offset++]; // NOTE: flags: bit0 ranges, bit1 reserved (compression via envelope).
-        const useRanges = flags & 1;
-        let dv = decodeVarint(buf, offset); const transferTs = dv.value; offset = dv.next;
-        const zkpBytes = buf.slice(offset, offset + 32); offset += 32;
-        const zkpHex = ethers.utils.hexlify(zkpBytes);
-        dv = decodeVarint(buf, offset); const num = dv.value; offset = dv.next; // numRanges or numSegments.
-
-        let chains = [];
-        for (let i = 0; i < num; i++) {
-          dv = decodeVarint(buf, offset); const startIdx = dv.value; offset = dv.next;
-          let count = 1;
-          if (useRanges) {
-            dv = decodeVarint(buf, offset); count = dv.value; offset = dv.next;
-          }
-          dv = decodeVarint(buf, offset); const uStart = dv.value; offset = dv.next;
-          let step = 0;
-          if (useRanges) {
-            dv = decodeVarint(buf, offset); step = dv.value; offset = dv.next;
-          }
-          const f = buf[offset++];
-          const origin = (f & 1) ? 'Locked' : 'Genesis';
-
-          for (let j = 0; j < count; j++) {
-            const idx = startIdx + j;
-            const unlockTs = uStart + step * j;
-            const senderIBAN = envelope.from;
-            const recipientIBAN = envelope.to;
-            const baseBio = GENESIS_BIO_CONSTANT + idx;
-            const initTs = unlockTs; // Arbitrary, not used in hash.
-            const initHash = await Utils.sha256Hex('init' + idx + senderIBAN);
-            const unlockHash = await Utils.sha256Hex(initHash + 'Unlock' + unlockTs + origin + senderIBAN + (baseBio + 1));
-            const transferBio = baseBio + 2;
-            const transferHash = await Utils.sha256Hex(unlockHash + 'Transfer' + transferTs + senderIBAN + recipientIBAN + transferBio);
-
-            const history = [
-              { event: 'Initialization', timestamp: initTs, from: origin, to: senderIBAN, bioConst: baseBio, integrityHash: initHash },
-              { event: 'Unlock', timestamp: unlockTs, from: origin, to: senderIBAN, bioConst: baseBio + 1, integrityHash: unlockHash },
-              { event: 'Transfer', timestamp: transferTs, from: senderIBAN, to: recipientIBAN, bioConst: transferBio, integrityHash: transferHash, biometricZKP: zkpHex }
-            ];
-            chains.push({ segmentIndex: idx, history });
-          }
-        }
-
-        // Optional note display.
-        if (envelope.note) UI.showAlert('Note from sender: ' + envelope.note);
-
-        await handleIncomingChains(chains, envelope.from, envelope.to);
+        const decryptedCompressed = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBuf, additionalData: Utils.enc.encode(aad) }, p2pKey, ctBuf);
+        const plainBuf = await Encryption.decompressGzip(new Uint8Array(decryptedCompressed));
+        await handleIncomingBinary(plainBuf.buffer, envelope.from, envelope.to, envelope);
       } else if (envelope.v === 2 && envelope.iv && envelope.ct) {
-        // Encrypted compact payload
-        var p2pKey = await deriveP2PKey(envelope.from, envelope.to, envelope.nonce);
+        // v2 encrypted compact payload
         var obj = await Encryption.decryptData(
           p2pKey,
           Encryption.base64ToBuffer(envelope.iv),
-          Encryption.base64ToBuffer(envelope.ct)
+          Encryption.base64ToBuffer(envelope.ct),
+          aad // NOTE: Added AAD to v2 decryption
         );
         if (!obj || !Array.isArray(obj.c)) return UI.showAlert('Decrypted payload invalid.');
         var expandedChains = fromCompactChains(obj.c);
@@ -1833,6 +1912,9 @@ async function migrateSegmentsV4() {
       if (s.ownershipChangeCount < 0) s.ownershipChangeCount = 0;
       mutated = true;
     }
+
+    if (typeof s.previousOwner !== 'string') { s.previousOwner = vaultData.bioIBAN; mutated = true; } // NOTE: Migrate previousOwner if missing
+    if (typeof s.originalOwner !== 'string') { s.originalOwner = vaultData.bioIBAN; mutated = true; } // NOTE: Migrate originalOwner if missing
 
     if (mutated) { await DB.saveSegmentToDB(s); changed++; }
   }
