@@ -1,28 +1,18 @@
 /* ======================================================================
  * main.js — BalanceChain PWA core (ES2018)
  *
- * ✓ Addresses the user's "blockers + gaps" checklist without changing the
- *   on-chain contract or overall product semantics.
- *
- * Major fixes in this build:
- * - IndexedDB: robust, versioned migration (old keyPath 'id' → 'key',
- *   adds indexes; preserves existing data).
- * - Boot: reliably loads persisted vaultData on return visits.
- * - Contract wiring: uses real TVM ABI (SegmentProof[], EIP-712 Claim) and
- *   builds proofs/signature exactly as the contract expects.
- * - Recipient key resolution: explicit resolver; never encrypts to self.
- * - Vault at-rest encryption: PBKDF2→AES-GCM optional layer restored.
- * - Biometric gating: enforced before send/receive/claim.
- * - History cap: ring buffer (max 10) per segment.
- * - Per-transfer cap: MAX_TRANSFER_SEGMENTS restored.
- * - Balance reconciliation: recompute from segments after mutations.
- * - Conflict resolver: persists envelope nonce; deterministic tie-break.
- * - HPKE salt + gzip await: per-session random salt; correct stream usage.
- * - Range packing compactness; consistent genesis parent seeds.
- * - ES2018: no BigInt literals.
- *
- * Note: This file intentionally provides a thin, DOM-agnostic API at
- * window.BioVault. The existing UI should bind to these methods.
+ * Clean, spec-accurate build with:
+ *  - Deterministic micro-ledger segments (Mint → Unlock → Transfer/Received → Claimed)
+ *  - On-chain TVM claim: ONLY segments with ownershipChangeCount === 1 (unspent genesis)
+ *  - P2P: HPKE-lite (ECDH P-256 + HKDF → AES-GCM) with AEAD AAD binding
+ *  - Range-compact body (entries), gzip before encrypt
+ *  - Caps: 360/day, 3600/month, 10800/year (segments) + TVM 900/yr (+100 parity)
+ *  - Ring buffer history max=10; single ownership increment on sender-side transfer
+ *  - IndexedDB migrations (legacy → canonical), nullifier + replay protection
+ *  - Optional vault at-rest encryption (PBKDF2 → AES-GCM)
+ *  - Biometric gating for send/receive/claim (WebAuthn assertion / ZKP hash)
+ *  - Ethers v6 wiring, EIP-712 Claim signature for claimTVM
+ *  - ES2018: no BigInt literals, numeric separators, or optional chaining
  * ====================================================================== */
 
 /* ===================== console helpers ===================== */
@@ -31,7 +21,7 @@ function _err(){ try{ console.error.apply(console, ['[BioVault]'].concat([].slic
 
 /* ===================== Global constants ===================== */
 var DB_NAME='BioVaultDB';
-var DB_VERSION=9; // ⬆ migration handles legacy stores & indexes
+var DB_VERSION=9; // migration-safe
 
 var VAULT_STORE='vault';
 var SEGMENTS_STORE='segments';
@@ -39,10 +29,10 @@ var NULLIFIERS_STORE='nullifiers';
 var REPLAYS_STORE='replays';
 var CONTACTS_STORE='contacts';
 
-// Monetary / protocol constants (unchanged semantics)
+// Monetary / protocol constants
 var INITIAL_BALANCE_SHE=1200;
 var EXCHANGE_RATE=12;                  // 12 SHE = 1 TVM
-var GENESIS_BIO_CONSTANT=1736565605;   // 2025-01-11 UTC
+var GENESIS_BIO_CONSTANT=1736565605;   // fixed anchor
 var BIO_STEP=1;
 var SEGMENTS_PER_LAYER=1200;
 var LAYERS=10;
@@ -51,11 +41,11 @@ var SEGMENTS_PER_TVM=12;
 var DAILY_CAP_SEG=DAILY_CAP_TVM*SEGMENTS_PER_TVM;     // 360
 var MONTHLY_CAP_SEG=MONTHLY_CAP_TVM*SEGMENTS_PER_TVM; // 3600
 var YEARLY_CAP_SEG=YEARLY_CAP_TVM*SEGMENTS_PER_TVM;   // 10800
-var MAX_TRANSFER_SEGMENTS=300; // policy cap (restored)
-var SEGMENT_HISTORY_MAX=10;    // ring buffer cap (restored)
+var MAX_TRANSFER_SEGMENTS=300; // per-transfer policy cap
+var SEGMENT_HISTORY_MAX=10;    // ring buffer cap
 
-// Contract (ABI matches Smart Contract (TVM))
-var CONTRACT_ADDRESS='0xcc79b1bc9eabc3d30a3800f4d41a4a0599e1f3c6'; // lowercased to be safe
+// Contract wiring (ABI matches provided TVM interface)
+var CONTRACT_ADDRESS='0xcc79b1bc9eabc3d30a3800f4d41a4a0599e1f3c6'; // lowercase safe
 var EXPECTED_CHAIN_ID=1;
 var TVM_ABI=[
   {"inputs":[{"components":[
@@ -104,33 +94,31 @@ var CBOR=(function(){function c(a,b){var o=new Uint8Array(a.length+b.length);o.s
 
 /* ===================== IndexedDB (with migrations) ===================== */
 var _db=null;
-function openDB(){return new Promise(function(res,rej){var req=indexedDB.open(DB_NAME,DB_VERSION); req.onupgradeneeded=function(ev){var db=ev.target.result; var old=ev.oldVersion|0; var tx=ev.currentTarget.transaction; // 1) capture legacy data
+function openDB(){return new Promise(function(res,rej){var req=indexedDB.open(DB_NAME,DB_VERSION); req.onupgradeneeded=function(ev){var db=ev.target.result; var old=ev.oldVersion|0; var tx=ev.currentTarget.transaction;
+    // capture legacy data (best-effort)
     var legacyVault=[], legacySegs=[], legacyNulls=[], legacyReplays=[], legacyContacts=[];
     function grab(name){ try{ var s=tx.objectStore(name); var g=s.getAll(); g.onsuccess=function(){ if(name==='vault') legacyVault=g.result; if(name==='segments') legacySegs=g.result; if(name==='nullifiers') legacyNulls=g.result; if(name==='replays') legacyReplays=g.result; if(name==='contacts') legacyContacts=g.result; }; }catch(e){}
     }
     if(old>0){ ['vault','segments','nullifiers','replays','contacts'].forEach(grab); }
-    // 2) drop & recreate stores with canonical definitions
+    // drop + recreate canonical stores
     try{ if(db.objectStoreNames.contains('vault')) db.deleteObjectStore('vault'); }catch(e){}
     var v=db.createObjectStore(VAULT_STORE,{keyPath:'key'});
     try{ if(db.objectStoreNames.contains('segments')) db.deleteObjectStore('segments'); }catch(e){}
     var s=db.createObjectStore(SEGMENTS_STORE,{keyPath:'segmentIndex'}); s.createIndex('by_owner','currentOwner',{unique:false}); s.createIndex('by_unlocked','unlocked',{unique:false});
-    if(!db.objectStoreNames.contains(NULLIFIERS_STORE)) db.createObjectStore(NULLIFIERS_STORE,{keyPath:'z'}); else try{ db.deleteObjectStore(NULLIFIERS_STORE); db.createObjectStore(NULLIFIERS_STORE,{keyPath:'z'});}catch(e){}
-    if(!db.objectStoreNames.contains(REPLAYS_STORE)) db.createObjectStore(REPLAYS_STORE,{keyPath:'nonce'}); else try{ db.deleteObjectStore(REPLAYS_STORE); db.createObjectStore(REPLAYS_STORE,{keyPath:'nonce'});}catch(e){}
-    if(!db.objectStoreNames.contains(CONTACTS_STORE)) db.createObjectStore(CONTACTS_STORE,{keyPath:'id'}); else try{ db.deleteObjectStore(CONTACTS_STORE); db.createObjectStore(CONTACTS_STORE,{keyPath:'id'});}catch(e){}
-    // 3) reinsert legacy data with new keyPath semantics
+    try{ if(db.objectStoreNames.contains(NULLIFIERS_STORE)) db.deleteObjectStore(NULLIFIERS_STORE); }catch(e){}
+    db.createObjectStore(NULLIFIERS_STORE,{keyPath:'z'});
+    try{ if(db.objectStoreNames.contains(REPLAYS_STORE)) db.deleteObjectStore(REPLAYS_STORE); }catch(e){}
+    db.createObjectStore(REPLAYS_STORE,{keyPath:'nonce'});
+    try{ if(db.objectStoreNames.contains(CONTACTS_STORE)) db.deleteObjectStore(CONTACTS_STORE); }catch(e){}
+    db.createObjectStore(CONTACTS_STORE,{keyPath:'id'});
+    // reinsert legacy data (normalize key semantics)
     var vt=tx.objectStore('vault');
-    function putV(obj){ vt.put(obj); }
-    if(legacyVault&&legacyVault.length){ legacyVault.forEach(function(r){ if(r && (r.key||r.id)){ // normalize
-          if(r.id && !r.key){ r.key=r.id; delete r.id; }
-          putV(r);
-        }}); }
-    // segments
+    if(legacyVault&&legacyVault.length){ legacyVault.forEach(function(r){ if(r){ if(r.id && !r.key){ r.key=r.id; delete r.id; } vt.put(r); } }); }
     var st=tx.objectStore('segments');
     if(legacySegs&&legacySegs.length){ legacySegs.forEach(function(r){ if(r){ st.put(r);} }); }
-    // nullifiers
-    try{ var nt=tx.objectStore(NULLIFIERS_STORE); if(legacyNulls&&legacyNulls.length) legacyNulls.forEach(function(r){ nt.put(r); }); }catch(e){}
-    try{ var rt=tx.objectStore(REPLAYS_STORE); if(legacyReplays&&legacyReplays.length) legacyReplays.forEach(function(r){ rt.put(r); }); }catch(e){}
-    try{ var ct=tx.objectStore(CONTACTS_STORE); if(legacyContacts&&legacyContacts.length) legacyContacts.forEach(function(r){ ct.put(r); }); }catch(e){}
+    var nt=tx.objectStore(NULLIFIERS_STORE); if(legacyNulls&&legacyNulls.length) legacyNulls.forEach(function(r){ nt.put(r); });
+    var rt=tx.objectStore(REPLAYS_STORE); if(legacyReplays&&legacyReplays.length) legacyReplays.forEach(function(r){ rt.put(r); });
+    var ct=tx.objectStore(CONTACTS_STORE); if(legacyContacts&&legacyContacts.length) legacyContacts.forEach(function(r){ ct.put(r); });
   };
   req.onsuccess=function(e){ _db=e.target.result; res(_db); };
   req.onerror=function(e){ rej(e.target.error); };
@@ -151,14 +139,9 @@ var VaultCrypto={ SALT_LABEL:'BioVault-v3',
   async decrypt(pack,key){ var iv=new Uint8Array(Utils.fromB64(pack.iv)); var ct=new Uint8Array(Utils.fromB64(pack.ct)); var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:iv}, key, ct); return JSON.parse(new TextDecoder().decode(new Uint8Array(pt))); }
 };
 
-async function loadVaultOnBoot(){ var rec=await idbGet(VAULT_STORE,'vaultDataEnc'); if(rec && rec.value){ // encrypted
-    if(!_vaultKey){ // cannot auto-decrypt without passphrase; leave placeholder
-      return; 
-    }
-    try{ var dec=await VaultCrypto.decrypt(rec.value,_vaultKey); vaultData=dec; }catch(e){ _err('Vault decrypt failed', e); }
-  } else { var plain=await idbGet(VAULT_STORE,'vaultData'); if(plain && plain.value){ vaultData=plain.value; } }
+async function loadVaultOnBoot(){ var rec=await idbGet(VAULT_STORE,'vaultDataEnc'); if(rec && rec.value){ if(!_vaultKey){ return; } try{ var dec=await VaultCrypto.decrypt(rec.value,_vaultKey); vaultData=dec; }catch(e){ _err('Vault decrypt failed', e); } }
+  else { var plain=await idbGet(VAULT_STORE,'vaultData'); if(plain && plain.value){ vaultData=plain.value; } }
 }
-
 async function persistVault(){ if(_vaultKey){ var pack=await VaultCrypto.encrypt(vaultData,_vaultKey); await idbPut(VAULT_STORE,{key:'vaultDataEnc', value:pack}); } else { await idbPut(VAULT_STORE,{key:'vaultData', value:vaultData}); } }
 
 /* ===================== Nullifiers & replays ===================== */
@@ -167,10 +150,7 @@ var Nullifiers={ async seen(z){var r=await idbGet(NULLIFIERS_STORE,z); return !!
 /* ===================== Segments ===================== */
 // segment record: { segmentIndex, currentOwner, previousOwner, originalOwner,
 // ownershipChangeCount, unlocked, claimed, history:[{event,timestamp,from,to,bioConst,parent,integrityHash,counted,nonce?,nullifier?}] }
-var Segments={ async get(i){return idbGet(SEGMENTS_STORE,i);}, async put(s){ // ring buffer cap
-    if(Array.isArray(s.history) && s.history.length>SEGMENT_HISTORY_MAX) s.history=s.history.slice(-SEGMENT_HISTORY_MAX);
-    return idbPut(SEGMENTS_STORE,s);
-  }, async all(){return idbGetAll(SEGMENTS_STORE);}, async ownedBy(o){return idbIndexAll(SEGMENTS_STORE,'by_owner',o);}, async unlockedOwnedBy(o){var all=await idbIndexAll(SEGMENTS_STORE,'by_owner',o); return all.filter(function(x){return x.unlocked && !x.claimed;});} };
+var Segments={ async get(i){return idbGet(SEGMENTS_STORE,i);}, async put(s){ if(Array.isArray(s.history) && s.history.length>SEGMENT_HISTORY_MAX) s.history=s.history.slice(-SEGMENT_HISTORY_MAX); return idbPut(SEGMENTS_STORE,s); }, async all(){return idbGetAll(SEGMENTS_STORE);}, async ownedBy(o){return idbIndexAll(SEGMENTS_STORE,'by_owner',o);}, async unlockedOwnedBy(o){var all=await idbIndexAll(SEGMENTS_STORE,'by_owner',o); return all.filter(function(x){return x.unlocked && !x.claimed;});} };
 
 /* ===================== BioGuard (biometric gating) ===================== */
 var BioGuard={ MAX_FAILS:3, LOCKOUT_SECONDS:3600,
@@ -179,7 +159,10 @@ var BioGuard={ MAX_FAILS:3, LOCKOUT_SECONDS:3600,
   async pass(){ var c=await idbGet(VAULT_STORE,'config')||{key:'config'}; c.authFails=0; c.lockoutUntil=0; await idbPut(VAULT_STORE,c); }
 };
 
-var Biometric={ busy:false, async enroll(){ if(this.busy) return null; this.busy=true; try{ var cred=await navigator.credentials.create({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)), rp:{name:'BioVault',id:location.hostname}, user:{id:crypto.getRandomValues(new Uint8Array(16)), name:'user@biovault', displayName:'User'}, pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}], authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'}, timeout:60000}}); if(!cred) return null; var b64u=btoa(String.fromCharCode.apply(null,new Uint8Array(cred.rawId))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); var c=await idbGet(VAULT_STORE,'config')||{key:'config'}; c.bioCredentialId=b64u; await idbPut(VAULT_STORE,c); return b64u; }catch(e){ _err('Enroll failed',e); return null; } finally{ this.busy=false; } }, async assert(){ if(this.busy) return false; this.busy=true; try{ var c=await idbGet(VAULT_STORE,'config'); if(!c||!c.bioCredentialId) return false; function b64uToU8(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; var bin=atob(s); var out=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; } var raw=b64uToU8(c.bioCredentialId); var ass=await navigator.credentials.get({ publicKey:{ challenge:crypto.getRandomValues(new Uint8Array(32)), allowCredentials:[{type:'public-key',id:raw}], userVerification:'required', timeout:60000 }}); return !!ass; }catch(e){ _err('Assertion failed',e); return false; } finally{ this.busy=false; } }, async zkp(){ if(this.busy) return null; this.busy=true; try{ var c=await idbGet(VAULT_STORE,'config'); if(!c||!c.bioCredentialId) return null; var raw=(function(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; var bin=atob(s); var out=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; })(c.bioCredentialId); var chal=crypto.getRandomValues(new Uint8Array(32)); var ass=await navigator.credentials.get({ publicKey:{ challenge:chal, allowCredentials:[{type:'public-key', id:raw}], userVerification:'required', timeout:60000 }}); if(!ass||!ass.response||!ass.response.signature) return null; var sigU8=new Uint8Array(ass.response.signature); var digest=await crypto.subtle.digest('SHA-256', sigU8); return '0x'+Array.from(new Uint8Array(digest)).map(function(b){return b.toString(16).padStart(2,'0');}).join(''); }catch(e){ _err('ZKP failed',e); return null; } finally{ this.busy=false; } }
+var Biometric={ busy:false,
+  async enroll(){ if(this.busy) return null; this.busy=true; try{ var cred=await navigator.credentials.create({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)), rp:{name:'BioVault',id:location.hostname}, user:{id:crypto.getRandomValues(new Uint8Array(16)), name:'user@biovault', displayName:'User'}, pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}], authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'}, timeout:60000}}); if(!cred) return null; var b64u=btoa(String.fromCharCode.apply(null,new Uint8Array(cred.rawId))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); var c=await idbGet(VAULT_STORE,'config')||{key:'config'}; c.bioCredentialId=b64u; await idbPut(VAULT_STORE,c); return b64u; }catch(e){ _err('Enroll failed',e); return null; } finally{ this.busy=false; } },
+  async assert(){ if(this.busy) return false; this.busy=true; try{ var c=await idbGet(VAULT_STORE,'config'); if(!c||!c.bioCredentialId) return false; function b64uToU8(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; var bin=atob(s); var out=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; } var raw=b64uToU8(c.bioCredentialId); var ass=await navigator.credentials.get({ publicKey:{ challenge:crypto.getRandomValues(new Uint8Array(32)), allowCredentials:[{type:'public-key',id:raw}], userVerification:'required', timeout:60000 }}); return !!ass; }catch(e){ _err('Assertion failed',e); return false; } finally{ this.busy=false; } },
+  async zkp(){ if(this.busy) return null; this.busy=true; try{ var c=await idbGet(VAULT_STORE,'config'); if(!c||!c.bioCredentialId) return null; var raw=(function(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; var bin=atob(s); var out=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; })(c.bioCredentialId); var chal=crypto.getRandomValues(new Uint8Array(32)); var ass=await navigator.credentials.get({ publicKey:{ challenge:chal, allowCredentials:[{type:'public-key', id:raw}], userVerification:'required', timeout:60000 }}); if(!ass||!ass.response||!ass.response.signature) return null; var sigU8=new Uint8Array(ass.response.signature); var digest=await crypto.subtle.digest('SHA-256', sigU8); return '0x'+Array.from(new Uint8Array(digest)).map(function(b){return b.toString(16).padStart(2,'0');}).join(''); }catch(e){ _err('ZKP failed',e); return null; } finally{ this.busy=false; } }
 };
 
 /* ===================== Ethers wiring ===================== */
@@ -236,21 +219,16 @@ async function initGenesisIfNeeded(){ var conf=await idbGet(VAULT_STORE,'config'
 
 /* ===================== Recipient key resolver ===================== */
 async function saveRecipientKey(identity, jwk){ if(!identity||!jwk) throw new Error('Missing identity/JWK'); await idbPut(CONTACTS_STORE,{id:identity, jwk:jwk}); }
-async function resolveRecipientKey(identity){ if(!identity) throw new Error('Missing recipient'); var rec=await idbGet(CONTACTS_STORE, identity); if(rec&&rec.jwk) return rec.jwk; // p256:base64urlX.base64urlY inline
-  if(identity.indexOf('p256:')===0){ var parts=identity.slice(5).split('.'); if(parts.length===2){ return {kty:'EC', crv:'P-256', x:parts[0], y:parts[1], ext:true}; } }
-  throw new Error('Unknown recipient key; add via saveRecipientKey(...)'); }
+async function resolveRecipientKey(identity){ if(!identity) throw new Error('Missing recipient'); var rec=await idbGet(CONTACTS_STORE, identity); if(rec&&rec.jwk) return rec.jwk; if(identity.indexOf('p256:')===0){ var parts=identity.slice(5).split('.'); if(parts.length===2){ return {kty:'EC', crv:'P-256', x:parts[0], y:parts[1], ext:true}; } } throw new Error('Unknown recipient key; add via saveRecipientKey(...)'); }
 
-/* ===================== Range packing ===================== */
-function packEntries(segs){ // compact: just entries; no redundant start/count
-  segs.sort(function(a,b){return a.segmentIndex-b.segmentIndex});
-  return segs.map(function(s){ return {i:s.segmentIndex,p:s._parent,o:s._occAfter,h:s._integrityHash,b:s._bioConst,z:s._nullifier}; });
-}
+/* ===================== Range packing (compact entries) ===================== */
+function packEntries(segs){ segs.sort(function(a,b){return a.segmentIndex-b.segmentIndex}); return segs.map(function(s){ return {i:s.segmentIndex,p:s._parent,o:s._occAfter,h:s._integrityHash,b:s._bioConst,z:s._nullifier}; }); }
 function unpackEntries(arr){ return (arr||[]).map(function(e){ return {segmentIndex:e.i,_parent:e.p,_occAfter:e.o,_integrityHash:e.h,_bioConst:e.b,_nullifier:e.z}; }); }
 
 /* ===================== P2P ===================== */
 var P2P={
   async prepareSend(recipientIdentity, amountSegments, memo){ amountSegments=(amountSegments|0); if(!(amountSegments>0)) throw new Error('Invalid amount'); if(amountSegments>MAX_TRANSFER_SEGMENTS) throw new Error('Transfer too large');
-    // biometric proof gate
+    // biometric gate
     var ok=await Biometric.assert(); if(!ok) throw new Error('Biometric verification required');
     var owner=vaultData.bioIBAN; var mine=await Segments.unlockedOwnedBy(owner); if(mine.length<amountSegments) throw new Error('Insufficient unlocked segments');
     var chosen=mine.slice(0,amountSegments);
@@ -259,7 +237,7 @@ var P2P={
       var s=chosen[k]; var last=s.history[s.history.length-1]; var occAfter=(s.ownershipChangeCount|0)+1; var parent=last.integrityHash;
       var integ='0x'+await Utils.sha256Hex(H_SEGMENT+parent+'|Transfer|'+now+'|'+s.currentOwner+'|'+recipientIdentity+'|'+(last.bioConst+BIO_STEP)+'|1');
       var z='0x'+await mkNullifier(s.segmentIndex,occAfter,parent);
-      // mutate sender state once (single occ increment)
+      // mutate sender state
       s.previousOwner=s.currentOwner; s.currentOwner=recipientIdentity; s.ownershipChangeCount=occAfter; s.unlocked=true;
       s.history.push({event:'Transfer', timestamp:now, from:s.previousOwner, to:recipientIdentity, bioConst:last.bioConst+BIO_STEP, parent:parent, integrityHash:integ, counted:true, nullifier:z});
       await Segments.put(s); await Nullifiers.add(z,{segmentIndex:s.segmentIndex, from:s.previousOwner, to:recipientIdentity});
@@ -320,34 +298,23 @@ async function unlockNextSegments(count){ if(count<=0) return 0; if(!canUnlock(c
 async function buildMintProofsForOcc1(needSeg){ // choose unlocked, occ==1
   var all=await Segments.all(); var pool=[]; for(var i=0;i<all.length;i++){ var s=all[i]; if(s.claimed) continue; if((s.ownershipChangeCount|0)===1 && s.originalOwner===vaultData.bioIBAN && s.previousOwner===vaultData.bioIBAN){ pool.push(s); if(pool.length===needSeg) break; } }
   if(pool.length<needSeg) throw new Error('Not enough occ==1 segments');
-  var proofs=[]; // contract expects flattened chains (one per layer for each segment)
-  for(var k=0;k<pool.length;k++){ var s=pool[k]; // root link only needs ownershipChangeCount==1 + bio consistency
-    var last=s.history[s.history.length-1];
-    var segmentIndex=s.segmentIndex; var currentBioConst=last.bioConst; // using latest bio at head (fits the chain rule in contract)
-    // ownershipProof/unlockIntegrityProof equality for non-root enforced on chain; for root we bind to userBioConstant
-    var ownershipProof='0x'+await Utils.sha256Hex(String(currentBioConst));
-    var unlockIntegrityProof=ownershipProof; // for a single-link chain this equals
-    var spentProof='0x'+await Utils.sha256Hex(vaultData.deviceKeyHash+'|'+segmentIndex+'|'+Date.now());
-    var biometricZKP=await Biometric.zkp(); if(!biometricZKP) throw new Error('Missing biometric ZKP');
-    proofs.push({ segmentIndex:segmentIndex, currentBioConst:currentBioConst, ownershipProof:ownershipProof, unlockIntegrityProof:unlockIntegrityProof, spentProof:spentProof, ownershipChangeCount:1, biometricZKP:biometricZKP });
-  }
+  var proofs=[]; for(var k=0;k<pool.length;k++){ var s=pool[k]; var last=s.history[s.history.length-1]; var currentBioConst=last.bioConst; var ownershipProof='0x'+await Utils.sha256Hex(String(currentBioConst)); var unlockIntegrityProof=ownershipProof; var spentProof='0x'+await Utils.sha256Hex(vaultData.deviceKeyHash+'|'+s.segmentIndex+'|'+Date.now()); var biometricZKP=await Biometric.zkp(); if(!biometricZKP) throw new Error('Missing biometric ZKP'); proofs.push({ segmentIndex:s.segmentIndex, currentBioConst:currentBioConst, ownershipProof:ownershipProof, unlockIntegrityProof:unlockIntegrityProof, spentProof:spentProof, ownershipChangeCount:1, biometricZKP:biometricZKP }); }
   return { proofs:proofs, used:pool };
 }
 
 async function claimTVM_onchain(tvmCount){ tvmCount=(tvmCount|0)||1; resetCapsIfNeeded(); if(vaultData.caps.tvmYearlyClaimed + tvmCount > (YEARLY_CAP_TVM + EXTRA_BONUS_TVM)) throw new Error('Yearly TVM cap reached'); var needSeg=tvmCount*SEGMENTS_PER_TVM; var pack=await buildMintProofsForOcc1(needSeg);
   await ensureEthers(); if(!EVM.tvm) await EVM.connect();
-  // Build EIP-712 claim per contract
+  // EIP-712 Claim
   var coder=new ethers.AbiCoder(); var inner=pack.proofs.map(function(p){ return ethers.keccak256(coder.encode(['uint256','uint256','bytes32','bytes32','bytes32','uint256','bytes32'], [p.segmentIndex,p.currentBioConst,p.ownershipProof,p.unlockIntegrityProof,p.spentProof,p.ownershipChangeCount,p.biometricZKP])); }); var proofsHash=ethers.keccak256(coder.encode(['bytes32[]'],[inner]));
   var deviceKeyHash=vaultData.deviceKeyHash; var userBioConstant=pack.proofs[0]?pack.proofs[0].currentBioConst:GENESIS_BIO_CONSTANT; var nonce=(Math.floor(Math.random()*0xFFFFFFFF)>>>0);
   var domain={ name:'TVM', version:'1', chainId:Number(EVM.chainId||EXPECTED_CHAIN_ID), verifyingContract:CONTRACT_ADDRESS.toLowerCase() };
   var types={ Claim:[ {name:'user',type:'address'},{name:'proofsHash',type:'bytes32'},{name:'deviceKeyHash',type:'bytes32'},{name:'userBioConstant',type:'uint256'},{name:'nonce',type:'uint256'} ]};
   var value={ user:EVM.account, proofsHash:proofsHash, deviceKeyHash:deviceKeyHash, userBioConstant:userBioConstant, nonce:nonce };
   var signature=await EVM.signer.signTypedData(domain,types,value);
-  // One more biometric check right before sending
+  // biometric gate one more time before network send
   var ok=await Biometric.assert(); if(!ok) throw new Error('Biometric verification required');
-  var tx=await EVM.tvm.claimTVM(pack.proofs, signature, deviceKeyHash, userBioConstant, nonce);
-  await tx.wait();
-  // Mark used segments as claimed (append non-counted event)
+  var tx=await EVM.tvm.claimTVM(pack.proofs, signature, deviceKeyHash, userBioConstant, nonce); await tx.wait();
+  // Mark used as claimed
   for(var i=0;i<pack.used.length;i++){ var s=pack.used[i]; var last=s.history[s.history.length-1]; var ts=Date.now(); var integ='0x'+await Utils.sha256Hex(H_SEGMENT+last.integrityHash+'|Claimed|'+ts+'|'+vaultData.bioIBAN+'|OnChain|'+(last.bioConst+1)+'|0'); s.claimed=true; s.history.push({event:'Claimed', timestamp:ts, from:vaultData.bioIBAN, to:'OnChain', bioConst:last.bioConst+1, parent:last.integrityHash, integrityHash:integ, counted:false}); await Segments.put(s); }
   vaultData.caps.tvmYearlyClaimed+=tvmCount; await persistVault(); await updateBalanceFromSegments();
   return { tx:tx.hash, tvm:tvmCount, segments:needSeg };
@@ -357,8 +324,7 @@ async function claimTVM_onchain(tvmCount){ tvmCount=(tvmCount|0)||1; resetCapsIf
 var BioVault={
   // lifecycle
   async init(){ await openDB(); await initGenesisIfNeeded(); await loadVaultOnBoot(); return true; },
-  async setVaultPassphrase(pass){ _vaultKey=await VaultCrypto.deriveKey(pass); // migrate plaintext → encrypted if existed
-    var plain=await idbGet(VAULT_STORE,'vaultData'); if(plain && plain.value){ await idbPut(VAULT_STORE,{key:'vaultData', value:null}); } await persistVault(); return true; },
+  async setVaultPassphrase(pass){ _vaultKey=await VaultCrypto.deriveKey(pass); var plain=await idbGet(VAULT_STORE,'vaultData'); if(plain && plain.value){ await idbPut(VAULT_STORE,{key:'vaultData', value:null}); } await persistVault(); return true; },
   // identity + biometrics
   async enrollBiometric(){ return Biometric.enroll(); }, async biometricAssert(){ return Biometric.assert(); }, async biometricZKP(){ return Biometric.zkp(); },
   // contacts / resolver
