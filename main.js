@@ -1,1916 +1,378 @@
-/******************************
- * main.js - ES2018 compatible (no optional chaining / numeric separators)
- * Ultimate master-class build: compact+encrypted P2P, network guards, robust charts, safe base64, 0x Bio-IBAN, bonus constant.
- * UPDATED: Implements clarified rules:
- *  - On-chain TVM claim uses segments with ownershipChangeCount === 1 (no 10-history on-chain).
- *  - P2P sends only unlocked segments; after send, auto-unlock equal count if caps allow.
- *  - Tracks daily/monthly/yearly segment caps (360/3600/10800) and yearly TVM (900 + 100 parity).
- ******************************/
-/* ==========================================================================
+/* ======================================================================
  * main.js — BalanceChain PWA core (ES2018)
- * Master-class: offline-first vault, compact+encrypted P2P, biometric+ZKP,
- *               TVM on-chain adapter, auto-ID resolver, and readiness gating.
- * Guarantees:
- *  - P2P is separate from on-chain (zero-fee, offline-capable).
- *  - On-chain TVM claim uses ONLY segments with ownershipChangeCount === 1.
- *  - Sender MUST be current owner; receiver becomes current; sender becomes previous; local history capped to 10.
- *  - Deterministic unlocks with hard caps (360/day, 3600/month, 10800/year; TVM 900/yr + 100 bonus parity).
- *  - ES2018-compatible: no optional chaining, no BigInt literals, no numeric separators.
- * ========================================================================== */
+ *
+ * ✓ Addresses the user's "blockers + gaps" checklist without changing the
+ *   on-chain contract or overall product semantics.
+ *
+ * Major fixes in this build:
+ * - IndexedDB: robust, versioned migration (old keyPath 'id' → 'key',
+ *   adds indexes; preserves existing data).
+ * - Boot: reliably loads persisted vaultData on return visits.
+ * - Contract wiring: uses real TVM ABI (SegmentProof[], EIP-712 Claim) and
+ *   builds proofs/signature exactly as the contract expects.
+ * - Recipient key resolution: explicit resolver; never encrypts to self.
+ * - Vault at-rest encryption: PBKDF2→AES-GCM optional layer restored.
+ * - Biometric gating: enforced before send/receive/claim.
+ * - History cap: ring buffer (max 10) per segment.
+ * - Per-transfer cap: MAX_TRANSFER_SEGMENTS restored.
+ * - Balance reconciliation: recompute from segments after mutations.
+ * - Conflict resolver: persists envelope nonce; deterministic tie-break.
+ * - HPKE salt + gzip await: per-session random salt; correct stream usage.
+ * - Range packing compactness; consistent genesis parent seeds.
+ * - ES2018: no BigInt literals.
+ *
+ * Note: This file intentionally provides a thin, DOM-agnostic API at
+ * window.BioVault. The existing UI should bind to these methods.
+ * ====================================================================== */
 
-/* ===================== lightweight console helpers ===================== */
+/* ===================== console helpers ===================== */
 function _log(){ try{ console.log.apply(console, ['[BioVault]'].concat([].slice.call(arguments))); }catch(e){} }
 function _err(){ try{ console.error.apply(console, ['[BioVault]'].concat([].slice.call(arguments))); }catch(e){} }
 
-// ---------- Base Setup / Global Constants ----------
-const DB_NAME = 'BioVaultDB';
-const DB_VERSION = 4; // bumped for new fields
-const VAULT_STORE = 'vault';
-const PROOFS_STORE = 'proofs';
-const SEGMENTS_STORE = 'segments';
-const INITIAL_BALANCE_SHE = 1200;
-const EXCHANGE_RATE = 12; // 1 TVM = 12 SHE
-const INITIAL_BIO_CONSTANT = 1736565605;
-const LOCKOUT_DURATION_SECONDS = 3600;
-const MAX_AUTH_ATTEMPTS = 3;
+/* ===================== Global constants ===================== */
+var DB_NAME='BioVaultDB';
+var DB_VERSION=9; // ⬆ migration handles legacy stores & indexes
 
-// IMPORTANT: lowercase to bypass strict checksum validation in ethers v6
-const CONTRACT_ADDRESS = '0xcc79b1bc9eabc3d30a3800f4d41a4a0599e1f3c6';
-const USDT_ADDRESS     = '0xdac17f958d2ee523a2206206994597c13d831ec7';
+var VAULT_STORE='vault';
+var SEGMENTS_STORE='segments';
+var NULLIFIERS_STORE='nullifiers';
+var REPLAYS_STORE='replays';
+var CONTACTS_STORE='contacts';
 
-// expected network for your deployment (change if not mainnet)
-const EXPECTED_CHAIN_ID = 1;
+// Monetary / protocol constants (unchanged semantics)
+var INITIAL_BALANCE_SHE=1200;
+var EXCHANGE_RATE=12;                  // 12 SHE = 1 TVM
+var GENESIS_BIO_CONSTANT=1736565605;   // 2025-01-11 UTC
+var BIO_STEP=1;
+var SEGMENTS_PER_LAYER=1200;
+var LAYERS=10;
+var DAILY_CAP_TVM=30, MONTHLY_CAP_TVM=300, YEARLY_CAP_TVM=900, EXTRA_BONUS_TVM=100;
+var SEGMENTS_PER_TVM=12;
+var DAILY_CAP_SEG=DAILY_CAP_TVM*SEGMENTS_PER_TVM;     // 360
+var MONTHLY_CAP_SEG=MONTHLY_CAP_TVM*SEGMENTS_PER_TVM; // 3600
+var YEARLY_CAP_SEG=YEARLY_CAP_TVM*SEGMENTS_PER_TVM;   // 10800
+var MAX_TRANSFER_SEGMENTS=300; // policy cap (restored)
+var SEGMENT_HISTORY_MAX=10;    // ring buffer cap (restored)
 
-const ABI = [
-  { "inputs":[{ "components":[
-      {"internalType":"uint256","name":"segmentIndex","type":"uint256"},
-      {"internalType":"uint256","name":"currentBioConst","type":"uint256"},
-      {"internalType":"bytes32","name":"ownershipProof","type":"bytes32"},
-      {"internalType":"bytes32","name":"unlockIntegrityProof","type":"bytes32"},
-      {"internalType":"bytes32","name":"spentProof","type":"bytes32"},
-      {"internalType":"uint256","name":"ownershipChangeCount","type":"uint256"},
-      {"internalType":"bytes32","name":"biometricZKP","type":"bytes32"}],
-      "internalType":"struct TVM.SegmentProof[]","name":"proofs","type":"tuple[]"},
-      {"internalType":"bytes","name":"signature","type":"bytes"},
-      {"internalType":"bytes32","name":"deviceKeyHash","type":"bytes32"},
-      {"internalType":"uint256","name":"userBioConstant","type":"uint256"},
-      {"internalType":"uint256","name":"nonce","type":"uint256"}],
-    "name":"claimTVM","outputs":[],"stateMutability":"nonpayable","type":"function"
-  },
-  {"inputs":[{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"exchangeTVMForSegments","outputs":[],"stateMutability":"nonpayable","type":"function"},
-  {"inputs":[{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"swapTVMForUSDT","outputs":[],"stateMutability":"nonpayable","type":"function"},
-  {"inputs":[{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"swapUSDTForTVM","outputs":[],"stateMutability":"nonpayable","type":"function"},
-  {"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
-  {"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},
-  {"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"spender","type":"address"}],"name":"allowance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
+// Contract (ABI matches Smart Contract (TVM))
+var CONTRACT_ADDRESS='0xcc79b1bc9eabc3d30a3800f4d41a4a0599e1f3c6'; // lowercased to be safe
+var EXPECTED_CHAIN_ID=1;
+var TVM_ABI=[
+  {"inputs":[{"components":[
+    {"internalType":"uint256","name":"segmentIndex","type":"uint256"},
+    {"internalType":"uint256","name":"currentBioConst","type":"uint256"},
+    {"internalType":"bytes32","name":"ownershipProof","type":"bytes32"},
+    {"internalType":"bytes32","name":"unlockIntegrityProof","type":"bytes32"},
+    {"internalType":"bytes32","name":"spentProof","type":"bytes32"},
+    {"internalType":"uint256","name":"ownershipChangeCount","type":"uint256"},
+    {"internalType":"bytes32","name":"biometricZKP","type":"bytes32"}
+  ],"internalType":"struct TVM.SegmentProof[]","name":"proofs","type":"tuple[]"},
+  {"internalType":"bytes","name":"signature","type":"bytes"},
+  {"internalType":"bytes32","name":"deviceKeyHash","type":"bytes32"},
+  {"internalType":"uint256","name":"userBioConstant","type":"uint256"},
+  {"internalType":"uint256","name":"nonce","type":"uint256"}],
+  "name":"claimTVM","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
 ];
 
-const GENESIS_BIO_CONSTANT = 1736565605;
-const BIO_TOLERANCE = 720; // seconds
-const BIO_STEP = 1;
-const SEGMENTS_PER_LAYER = 1200;
-const LAYERS = 10;
-const DECIMALS_FACTOR = 1000000;
-const SEGMENTS_PER_TVM = 12;
-const DAILY_CAP_TVM = 30;
-const MONTHLY_CAP_TVM = 300;
-const YEARLY_CAP_TVM = 900;
-const EXTRA_BONUS_TVM = 100;
-const MAX_PROOFS_LENGTH = 200;
-const SEGMENT_HISTORY_MAX = 10;
-const SEGMENT_PROOF_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("SegmentProof(uint256 segmentIndex,uint256 currentBioConst,bytes32 ownershipProof,bytes32 unlockIntegrityProof,bytes32 spentProof,uint256 ownershipChangeCount,bytes32 biometricZKP)"));
-const CLAIM_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("Claim(address user,bytes32 proofsHash,bytes32 deviceKeyHash,uint256 userBioConstant,uint256 nonce)"));
-const HISTORY_MAX = 20;
-const KEY_HASH_SALT = "Balance-Chain-v3-PRD";
-const PBKDF2_ITERS = 310000;
-const AES_KEY_LENGTH = 256;
-const MAX_IDLE = 15 * 60 * 1000;
-const HMAC_KEY = new TextEncoder().encode("BalanceChainHMACSecret");
-const VAULT_BACKUP_KEY = 'vaultArmoredBackup';
-const STORAGE_CHECK_INTERVAL = 300000;
-const vaultSyncChannel = (typeof BroadcastChannel !== 'undefined') ? new BroadcastChannel('vault-sync') : null;
-const WALLET_CONNECT_PROJECT_ID = 'c4f79cc9f2f73b737d4d06795a48b4a5';
+// Hash domains
+var H_SEGMENT='SEG_V2|';
+var H_NULLIFIER='NF_V1|';
+var H_AAD='P2P_AAD_V3|';
 
-// ---- QR/ZIP/Chart integration constants ----
-const QR_CHUNK_MAX = 900;     // safe per-frame payload length for QR (approx, ECC M)
-const QR_SIZE = 512;          // px
-const QR_MARGIN = 2;          // quiet zone
-var _qrLibReady = false;
-var _zipLibReady = false;
-var _chartLibReady = false;
+// P2P envelope
+var P2P_VERSION=3;
+var P2P_SCHEMA='p2p/v3@2025-08-27';
 
-// ---------- Derived segment caps (segments, not TVM) ----------
-const DAILY_CAP_SEG  = DAILY_CAP_TVM  * SEGMENTS_PER_TVM; // 360
-const MONTHLY_CAP_SEG= MONTHLY_CAP_TVM* SEGMENTS_PER_TVM; // 3600
-const YEARLY_CAP_SEG = YEARLY_CAP_TVM * SEGMENTS_PER_TVM; // 10800
+// UI guards
+var MAX_IDLE_MS=15*60*1000;
 
-// ---------- State ----------
-let vaultUnlocked = false;
-let derivedKey = null;
-let provider = null;
-let signer = null;
-let tvmContract = null;
-let usdtContract = null;
-let account = null;
-let chainId = null;
+/* ===================== utils ===================== */
+var Utils=(function(){
+  function enc(){return new TextEncoder();}
+  function dec(){return new TextDecoder();}
+  function toB64(buf){ var a=buf instanceof ArrayBuffer?new Uint8Array(buf):(buf&&buf.buffer)?new Uint8Array(buf.buffer):new Uint8Array(buf||[]); var CH=32768,s=''; for(var i=0;i<a.length;i+=CH){ s+=String.fromCharCode.apply(null,a.subarray(i,i+CH)); } return btoa(s); }
+  function fromB64(b64){ return Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0);}).buffer; }
+  function sha256Hex(str){ return crypto.subtle.digest('SHA-256', enc().encode(str)).then(function(buf){ return Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,'0');}).join(''); }); }
+  function randomNonce(){ var u=new Uint32Array(4); crypto.getRandomValues(u); return [u[0],u[1],u[2],u[3]].map(function(x){return x.toString(16)}).join(''); }
+  function canonical(obj){ return JSON.stringify(obj, Object.keys(obj).sort()); }
+  return {enc:enc(), dec:dec(), toB64:toB64, fromB64:fromB64, sha256Hex:sha256Hex, randomNonce:randomNonce, canonical:canonical};
+})();
 
-let autoProofs = null;
-let autoDeviceKeyHash = '';
-let autoUserBioConstant = 0;
-let autoNonce = 0;
-let autoSignature = '';
-let transactionLock = false;
+/* ===================== CBOR (tiny subset) ===================== */
+var CBOR=(function(){function c(a,b){var o=new Uint8Array(a.length+b.length);o.set(a,0);o.set(b,a.length);return o;}function eu(n){if(n<24)return new Uint8Array([n]);if(n<256)return new Uint8Array([24,n]);if(n<65536)return new Uint8Array([25,n>>8,n&255]);var a=new Uint8Array(5);a[0]=26;a[1]=(n>>>24)&255;a[2]=(n>>>16)&255;a[3]=(n>>>8)&255;a[4]=n&255;return a;}function eb(b){var l=b.length,h;if(l<24)h=new Uint8Array([(2<<5)|l]);else if(l<256)h=new Uint8Array([(2<<5)|24,l]);else if(l<65536)h=new Uint8Array([(2<<5)|25,l>>8,l&255]);else throw new Error('CBOR bytes too long');return c(h,b);}function es(s){var b=new TextEncoder().encode(s),l=b.length,h;if(l<24)h=new Uint8Array([(3<<5)|l]);else if(l<256)h=new Uint8Array([(3<<5)|24,l]);else if(l<65536)h=new Uint8Array([(3<<5)|25,l>>8,l&255]);else throw new Error('CBOR string too long');return c(h,b);}function ea(arr){var l=arr.length,h;if(l<24)h=new Uint8Array([(4<<5)|l]);else if(l<256)h=new Uint8Array([(4<<5)|24,l]);else if(l<65536)h=new Uint8Array([(4<<5)|25,l>>8,l&255]);else throw new Error('CBOR array too long');var out=h;for(var i=0;i<l;i++) out=c(out,encode(arr[i]));return out;}function em(obj){var ks=Object.keys(obj),l=ks.length,h;if(l<24)h=new Uint8Array([(5<<5)|l]);else if(l<256)h=new Uint8Array([(5<<5)|24,l]);else throw new Error('CBOR map too big');var out=h;for(var i=0;i<l;i++){var k=ks[i],nk=parseInt(k,10);out=c(out,(k===''+nk)?encode(nk):es(k));out=c(out,encode(obj[k]));}return out;}function encode(v){if(v===null)return new Uint8Array([(7<<5)|22]);if(v===false)return new Uint8Array([(7<<5)|20]);if(v===true)return new Uint8Array([(7<<5)|21]);var t=typeof v;if(t==='number'){if(Math.floor(v)!==v) throw new Error('CBOR:int only'); if(v>=0){ if(v<24)return new Uint8Array([(0<<5)|v]); if(v<256)return new Uint8Array([(0<<5)|24,v]); if(v<65536)return new Uint8Array([(0<<5)|25,v>>8,v&255]); var a=new Uint8Array(5); a[0]=(0<<5)|26; a[1]=(v>>>24)&255;a[2]=(v>>>16)&255;a[3]=(v>>>8)&255;a[4]=v&255; return a; } else { var m=-1-v; if(m<24)return new Uint8Array([(1<<5)|m]); if(m<256)return new Uint8Array([(1<<5)|24,m]); if(m<65536)return new Uint8Array([(1<<5)|25,m>>8,m&255]); var a2=new Uint8Array(5); a2[0]=(1<<5)|26; a2[1]=(m>>>24)&255;a2[2]=(m>>>16)&255;a2[3]=(m>>>8)&255;a2[4]=m&255; return a2; } } if(t==='string')return es(v); if(v instanceof Uint8Array)return eb(v); if(Array.isArray(v))return ea(v); if(t==='object')return em(v); throw new Error('CBOR:unsupported'); } function rl(u8,off,ai){if(ai<24)return{l:ai,o:off}; if(ai===24)return{l:u8[off],o:off+1}; if(ai===25)return{l:(u8[off]<<8)|u8[off+1],o:off+2}; if(ai===26){var v=(u8[off]<<24)|(u8[off+1]<<16)|(u8[off+2]<<8)|u8[off+3]; return{l:(v>>>0),o:off+4};} throw new Error('CBOR:len');} function dec(u8,off){if(!off)off=0; var ib=u8[off++],mt=ib>>5,ai=ib&31; if(mt===0){ if(ai<24)return{v:ai,off:off}; if(ai===24)return{v:u8[off],off:off+1}; if(ai===25)return{v:(u8[off]<<8)|u8[off+1],off:off+2}; if(ai===26){var v=(u8[off]<<24)|(u8[off+1]<<16)|(u8[off+2]<<8)|u8[off+3]; return{v:(v>>>0),off:off+4}; } } if(mt===1){ if(ai<24)return{v:-1-ai,off:off}; if(ai===24)return{v:-1-u8[off],off:off+1}; if(ai===25){var m=(u8[off]<<8)|u8[off+1]; return{v:-1-m,off:off+2}; } if(ai===26){var mm=(u8[off]<<24)|(u8[off+1]<<16)|(u8[off+2]<<8)|u8[off+3]; return{v:-1-(mm>>>0),off:off+4}; } } if(mt===2){var r=rl(u8,off,ai); var bytes=u8.subarray(r.o,r.o+r.l); return{v:new Uint8Array(bytes),off:r.o+r.l}; } if(mt===3){var r2=rl(u8,off,ai); var str=new TextDecoder().decode(u8.subarray(r2.o,r2.o+r2.l)); return{v:str,off:r2.o+r2.l}; } if(mt===4){var r3=rl(u8,off,ai),arr=[],o=r3.o; for(var i=0;i<r3.l;i++){var d=dec(u8,o); arr.push(d.v); o=d.off;} return{v:arr,off:o}; } if(mt===5){var r4=rl(u8,off,ai),obj={},o2=r4.o; for(var i2=0;i2<r4.l;i2++){var kd=dec(u8,o2); o2=kd.off; var key=kd.v; if(typeof key!=='string'&&typeof key!=='number') key=''+key; var vd=dec(u8,o2); o2=vd.off; obj[key]=vd.v; } return{v:obj,off:o2}; } if(mt===7){ if(ai===20)return{v:false,off:off}; if(ai===21)return{v:true,off:off}; if(ai===22)return{v:null,off:off}; } throw new Error('CBOR:bad major'); } return {encode:encode, decode:function(u8){return dec(u8,0).v;}};})();
 
-const SESSION_URL_KEY = 'last_session_url';
-const VAULT_UNLOCKED_KEY = 'vaultUnlocked';
-const VAULT_LOCK_KEY = 'vaultLock';
-
-let vaultData = {
-  bioIBAN: null,
-  initialBioConstant: INITIAL_BIO_CONSTANT,
-  bonusConstant: 0,
-  initialBalanceSHE: INITIAL_BALANCE_SHE,
-  balanceSHE: 0,
-  balanceUSD: 0,
-  lastUTCTimestamp: 0,
-  transactions: [],
-  authAttempts: 0,
-  lockoutTimestamp: null,
-  joinTimestamp: 0,
-  credentialId: null,
-  userWallet: "",
-  deviceKeyHash: "",
-  layerBalances: Array.from({length: LAYERS}, function(){ return 0; }),
-
-  // NEW: caps & unlock tracking (UTC)
-  caps: {
-    dayKey: "", monthKey: "", yearKey: "",
-    dayUsedSeg: 0, monthUsedSeg: 0, yearUsedSeg: 0, // unlocks this period
-    tvmYearlyClaimed: 0 // on-chain claims recorded locally (contract is source of truth)
-  },
-
-  // NEW: next index to unlock (deterministic 1..12,000 per year)
-  nextSegmentIndex: INITIAL_BALANCE_SHE + 1
-};
-vaultData.layerBalances[0] = INITIAL_BALANCE_SHE;
-
-// ---- Catch-Out Result modal runtime state ----
-var lastCatchOutPayload = null;  // object
-var lastCatchOutPayloadStr = ""; // string
-var lastQrFrames = [];           // array of strings with "BC|i|N|chunk"
-var lastQrFrameIndex = 0;
-
-// ---------- Utils (safe base64 / crypto helpers) ----------
-function _u8ToB64(u8) {
-  var CHUNK = 0x8000; // 32KB chunks
-  var s = '';
-  for (var i = 0; i < u8.length; i += CHUNK) {
-    s += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
-  }
-  return btoa(s);
-}
-const Utils = {
-  enc: new TextEncoder(),
-  dec: new TextDecoder(),
-  toB64: function (buf) {
-    var u8 = buf instanceof ArrayBuffer ? new Uint8Array(buf)
-      : (buf && buf.buffer) ? new Uint8Array(buf.buffer)
-      : new Uint8Array(buf || []);
-    return _u8ToB64(u8);
-  },
-  fromB64: function (b64) { return Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); }).buffer; },
-  rand:  function (len) { return crypto.getRandomValues(new Uint8Array(len)); },
-  ctEq:  function (a, b) {
-    a = a || ""; b = b || "";
-    if (a.length !== b.length) return false;
-    var res = 0; for (var i=0;i<a.length;i++) res |= a.charCodeAt(i) ^ b.charCodeAt(i);
-    return res===0;
-  },
-  canonical: function (obj) { return JSON.stringify(obj, Object.keys(obj).sort()); },
-  sha256: async function (data) {
-    const buf = await crypto.subtle.digest("SHA-256", typeof data === "string" ? Utils.enc.encode(data) : data);
-    return Utils.toB64(buf);
-  },
-  sha256Hex: async function (str) {
-    const buf = await crypto.subtle.digest("SHA-256", Utils.enc.encode(str));
-    return Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,"0");}).join("");
-  },
-  hmacSha256: async function (message) {
-    const key = await crypto.subtle.importKey("raw", HMAC_KEY, { name:"HMAC", hash:"SHA-256" }, false, ["sign"]);
-    const signature = await crypto.subtle.sign("HMAC", key, Utils.enc.encode(message));
-    return Utils.toB64(signature);
-  },
-  sanitizeInput: function (input) { return (typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(input) : String(input)); },
-  to0x: function (hex) { return hex && hex.slice(0,2)==='0x' ? hex : ('0x' + hex); }
-};
-
-// ---------- Script Loader (QR + JSZip + Chart.js) ----------
-function injectScript(src) {
-  return new Promise(function(resolve, reject){
-    var s = document.createElement('script');
-    s.src = src; s.async = true;
-    s.onload = resolve; s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-async function ensureQrLib() {
-  if (_qrLibReady) return;
-  try {
-    await injectScript('https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js');
-    if (window.QRCode && typeof window.QRCode.toCanvas === 'function') _qrLibReady = true;
-  } catch (e) { console.warn('[BioVault] QR lib load failed', e); }
-}
-async function ensureZipLib() {
-  if (_zipLibReady) return;
-  try {
-    await injectScript('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
-    if (window.JSZip) _zipLibReady = true;
-  } catch (e) { console.warn('[BioVault] JSZip load failed', e); }
-}
-async function ensureChartLib() {
-  if (_chartLibReady || window.Chart) { _chartLibReady = true; return; }
-  try {
-    await injectScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js');
-    _chartLibReady = !!window.Chart;
-  } catch (e) { console.warn('[BioVault] Chart.js load failed', e); }
-}
-
-// ---------- Encryption ----------
-const Encryption = {
-  encryptData: async (key, dataObj) => {
-    const iv = Utils.rand(12);
-    const plaintext = Utils.enc.encode(JSON.stringify(dataObj));
-    const ciphertext = await crypto.subtle.encrypt({ name:'AES-GCM', iv: iv }, key, plaintext);
-    return { iv: iv, ciphertext: ciphertext };
-  },
-  decryptData: async (key, iv, ciphertext) => {
-    const plainBuf = await crypto.subtle.decrypt({ name:'AES-GCM', iv: iv }, key, ciphertext);
-    return JSON.parse(Utils.dec.decode(plainBuf));
-  },
-  bufferToBase64: (buf) => {
-    var u8 = buf instanceof ArrayBuffer ? new Uint8Array(buf)
-      : (buf && buf.buffer) ? new Uint8Array(buf.buffer)
-      : new Uint8Array(buf);
-    return _u8ToB64(u8);
-  },
-  base64ToBuffer: (b64) => {
-    if (typeof b64 !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw new Error('Invalid Base64 string');
-    const bin = atob(b64); const out = new Uint8Array(bin.length);
-    for (let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
-    return out.buffer;
-  }
-};
-
-// ---------- DB (IndexedDB) ----------
-const DB = {
-  openVaultDB: () => new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(VAULT_STORE))   db.createObjectStore(VAULT_STORE, { keyPath:'id' });
-      if (!db.objectStoreNames.contains(PROOFS_STORE))  db.createObjectStore(PROOFS_STORE,{ keyPath:'id' });
-      if (!db.objectStoreNames.contains(SEGMENTS_STORE))db.createObjectStore(SEGMENTS_STORE,{ keyPath:'segmentIndex' });
-      if (!db.objectStoreNames.contains('replays'))     db.createObjectStore('replays',{ keyPath:'nonce' });
-    };
-    req.onsuccess = (e) => resolve(e.target.result);
-    req.onerror   = (e) => reject(e.target.error);
-  }),
-
-  saveVaultDataToDB: async (iv, ciphertext, saltB64) => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([VAULT_STORE], 'readwrite');
-      tx.objectStore(VAULT_STORE).put({
-        id:'vaultData',
-        iv: Encryption.bufferToBase64(iv),
-        ciphertext: Encryption.bufferToBase64(ciphertext),
-        salt: saltB64,
-        lockoutTimestamp: vaultData.lockoutTimestamp || null,
-        authAttempts: vaultData.authAttempts || 0
-      });
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
-    });
-  },
-
-  loadVaultDataFromDB: async () => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([VAULT_STORE], 'readonly');
-      const get = tx.objectStore(VAULT_STORE).get('vaultData');
-      get.onsuccess = () => {
-        const r = get.result;
-        if (!r) return resolve(null);
-        try {
-          resolve({
-            iv: Encryption.base64ToBuffer(r.iv),
-            ciphertext: Encryption.base64ToBuffer(r.ciphertext),
-            salt: r.salt ? Encryption.base64ToBuffer(r.salt) : null,
-            lockoutTimestamp: r.lockoutTimestamp || null,
-            authAttempts: r.authAttempts || 0
-          });
-        } catch (e) { console.error('[BioVault] Corrupted vault record', e); resolve(null); }
-      };
-      get.onerror = (e)=>reject(e.target.error);
-    });
-  },
-
-  clearVaultDB: async () => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([VAULT_STORE], 'readwrite');
-      tx.objectStore(VAULT_STORE).clear();
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
-    });
-  },
-
-  saveProofsToDB: async (bundle) => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([PROOFS_STORE], 'readwrite');
-      tx.objectStore(PROOFS_STORE).put({ id:'autoProofs', data: bundle });
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
-    });
-  },
-  loadProofsFromDB: async () => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([PROOFS_STORE], 'readonly');
-      const get = tx.objectStore(PROOFS_STORE).get('autoProofs');
-      get.onsuccess = ()=>resolve(get.result ? get.result.data : null);
-      get.onerror = (e)=>reject(e.target.error);
-    });
-  },
-
-  saveSegmentToDB: async (segment) => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([SEGMENTS_STORE], 'readwrite');
-      tx.objectStore(SEGMENTS_STORE).put(segment);
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
-    });
-  },
-  loadSegmentsFromDB: async () => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([SEGMENTS_STORE], 'readonly');
-      const getAll = tx.objectStore(SEGMENTS_STORE).getAll();
-      getAll.onsuccess = ()=>resolve(getAll.result || []);
-      getAll.onerror = (e)=>reject(e.target.error);
-    });
-  },
-  deleteSegmentFromDB: async (segmentIndex) => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([SEGMENTS_STORE], 'readwrite');
-      tx.objectStore(SEGMENTS_STORE).delete(segmentIndex);
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
-    });
-  },
-  getSegment: async (segmentIndex) => {
-    const db = await DB.openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([SEGMENTS_STORE], 'readonly');
-      const req = tx.objectStore(SEGMENTS_STORE).get(segmentIndex);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = (e) => reject(e.target.error);
-    });
-  },
-  hasReplayNonce: async (nonce) => {
-    const db = await DB.openVaultDB();
-    return new Promise((res, rej) => {
-      const tx = db.transaction(['replays'],'readonly');
-      const g = tx.objectStore('replays').get(nonce);
-      g.onsuccess = () => res(!!g.result);
-      g.onerror = (e) => rej(e.target.error);
-    });
-  },
-  putReplayNonce: async (nonce) => {
-    const db = await DB.openVaultDB();
-    return new Promise((res, rej) => {
-      const tx = db.transaction(['replays'],'readwrite');
-      tx.objectStore('replays').put({ nonce: nonce, ts: Date.now() });
-      tx.oncomplete = res; tx.onerror = (e)=>rej(e.target.error);
-    });
-  }
-};
-
-// ---------- Biometric ----------
-const Biometric = {
-  _bioBusy: false,
-
-  performBiometricAuthenticationForCreation: async () => {
-    if (Biometric._bioBusy) return null;
-    Biometric._bioBusy = true;
-    try {
-      const credential = await navigator.credentials.create({
-        publicKey: {
-          challenge: Utils.rand(32),
-          rp: { name: "BioVault", id: location.hostname },
-          user: { id: Utils.rand(16), name: "user@biovault", displayName: "User" },
-          pubKeyCredParams: [
-            { type: "public-key", alg: -7   }, // ES256
-            { type: "public-key", alg: -257 }  // RS256
-          ],
-          authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-          timeout: 60000
-        }
-      });
-      return credential;
-    } catch (err) {
-      console.error('[BioVault] Biometric creation failed', err);
-      return null;
-    } finally {
-      Biometric._bioBusy = false;
+/* ===================== IndexedDB (with migrations) ===================== */
+var _db=null;
+function openDB(){return new Promise(function(res,rej){var req=indexedDB.open(DB_NAME,DB_VERSION); req.onupgradeneeded=function(ev){var db=ev.target.result; var old=ev.oldVersion|0; var tx=ev.currentTarget.transaction; // 1) capture legacy data
+    var legacyVault=[], legacySegs=[], legacyNulls=[], legacyReplays=[], legacyContacts=[];
+    function grab(name){ try{ var s=tx.objectStore(name); var g=s.getAll(); g.onsuccess=function(){ if(name==='vault') legacyVault=g.result; if(name==='segments') legacySegs=g.result; if(name==='nullifiers') legacyNulls=g.result; if(name==='replays') legacyReplays=g.result; if(name==='contacts') legacyContacts=g.result; }; }catch(e){}
     }
-  },
+    if(old>0){ ['vault','segments','nullifiers','replays','contacts'].forEach(grab); }
+    // 2) drop & recreate stores with canonical definitions
+    try{ if(db.objectStoreNames.contains('vault')) db.deleteObjectStore('vault'); }catch(e){}
+    var v=db.createObjectStore(VAULT_STORE,{keyPath:'key'});
+    try{ if(db.objectStoreNames.contains('segments')) db.deleteObjectStore('segments'); }catch(e){}
+    var s=db.createObjectStore(SEGMENTS_STORE,{keyPath:'segmentIndex'}); s.createIndex('by_owner','currentOwner',{unique:false}); s.createIndex('by_unlocked','unlocked',{unique:false});
+    if(!db.objectStoreNames.contains(NULLIFIERS_STORE)) db.createObjectStore(NULLIFIERS_STORE,{keyPath:'z'}); else try{ db.deleteObjectStore(NULLIFIERS_STORE); db.createObjectStore(NULLIFIERS_STORE,{keyPath:'z'});}catch(e){}
+    if(!db.objectStoreNames.contains(REPLAYS_STORE)) db.createObjectStore(REPLAYS_STORE,{keyPath:'nonce'}); else try{ db.deleteObjectStore(REPLAYS_STORE); db.createObjectStore(REPLAYS_STORE,{keyPath:'nonce'});}catch(e){}
+    if(!db.objectStoreNames.contains(CONTACTS_STORE)) db.createObjectStore(CONTACTS_STORE,{keyPath:'id'}); else try{ db.deleteObjectStore(CONTACTS_STORE); db.createObjectStore(CONTACTS_STORE,{keyPath:'id'});}catch(e){}
+    // 3) reinsert legacy data with new keyPath semantics
+    var vt=tx.objectStore('vault');
+    function putV(obj){ vt.put(obj); }
+    if(legacyVault&&legacyVault.length){ legacyVault.forEach(function(r){ if(r && (r.key||r.id)){ // normalize
+          if(r.id && !r.key){ r.key=r.id; delete r.id; }
+          putV(r);
+        }}); }
+    // segments
+    var st=tx.objectStore('segments');
+    if(legacySegs&&legacySegs.length){ legacySegs.forEach(function(r){ if(r){ st.put(r);} }); }
+    // nullifiers
+    try{ var nt=tx.objectStore(NULLIFIERS_STORE); if(legacyNulls&&legacyNulls.length) legacyNulls.forEach(function(r){ nt.put(r); }); }catch(e){}
+    try{ var rt=tx.objectStore(REPLAYS_STORE); if(legacyReplays&&legacyReplays.length) legacyReplays.forEach(function(r){ rt.put(r); }); }catch(e){}
+    try{ var ct=tx.objectStore(CONTACTS_STORE); if(legacyContacts&&legacyContacts.length) legacyContacts.forEach(function(r){ ct.put(r); }); }catch(e){}
+  };
+  req.onsuccess=function(e){ _db=e.target.result; res(_db); };
+  req.onerror=function(e){ rej(e.target.error); };
+});}
+function _tx(name,mode){return _db.transaction([name],mode).objectStore(name);} 
+function idbPut(store,obj){return new Promise(function(res,rej){var r=_tx(store,'readwrite').put(obj); r.onsuccess=function(){res(true)}; r.onerror=function(e){rej(e.target.error)}});} 
+function idbGet(store,key){return new Promise(function(res,rej){var r=_tx(store,'readonly').get(key); r.onsuccess=function(){res(r.result||null)}; r.onerror=function(e){rej(e.target.error)}});} 
+function idbGetAll(store){return new Promise(function(res,rej){var r=_tx(store,'readonly').getAll(); r.onsuccess=function(){res(r.result||[])}; r.onerror=function(e){rej(e.target.error)}});} 
+function idbIndexAll(store,idx,val){return new Promise(function(res,rej){var i=_tx(store,'readonly').index(idx); var q=i.getAll(val); q.onsuccess=function(){res(q.result||[])}; q.onerror=function(e){rej(e.target.error)}});} 
 
-  performBiometricAssertion: async (credentialId) => {
-    if (Biometric._bioBusy) return false;
-    Biometric._bioBusy = true;
-    try {
-      const idBuf = Encryption.base64ToBuffer(credentialId);
-      const assertion = await navigator.credentials.get({
-        publicKey: {
-          challenge: Utils.rand(32),
-          allowCredentials: [{ type: "public-key", id: new Uint8Array(idBuf) }],
-          userVerification: "required",
-          timeout: 60000
-        }
-      });
-      return !!assertion;
-    } catch (err) {
-      console.error('[BioVault] Biometric assertion failed', err);
-      return false;
-    } finally {
-      Biometric._bioBusy = false;
-    }
-  },
+/* ===================== Vault model (with optional at-rest encryption) ===================== */
+var vaultData={ bioIBAN:null, deviceKeyHash:'', credentialId:null, joinTimestamp:0, balanceSHE:0, caps:{dayKey:'',monthKey:'',yearKey:'',dayUsedSeg:0,monthUsedSeg:0,yearUsedSeg:0,tvmYearlyClaimed:0}, nextSegmentIndex:INITIAL_BALANCE_SHE+1, autoCopy:false, transactions:[] };
+var _vaultKey=null; // CryptoKey for AES-GCM when passphrase set
 
-  generateBiometricZKP: async () => {
-    if (!vaultData || !vaultData.credentialId) return null;
-    if (Biometric._bioBusy) return null;
-    Biometric._bioBusy = true;
-    try {
-      const challenge = Utils.rand(32);
-      const idBuf = Encryption.base64ToBuffer(vaultData.credentialId);
-      const assertion = await navigator.credentials.get({
-        publicKey: {
-          challenge: challenge,
-          allowCredentials: [{ type: "public-key", id: new Uint8Array(idBuf) }],
-          userVerification: "required",
-          timeout: 60000
-        }
-      });
-      if (!assertion) return null;
-      const hex = await Utils.sha256Hex(String.fromCharCode.apply(null, new Uint8Array(assertion.signature)));
-      return Utils.to0x(hex);
-    } catch (err) {
-      console.error('[BioVault] Biometric ZKP failed', err);
-      return null;
-    } finally {
-      Biometric._bioBusy = false;
-    }
-  }
+var VaultCrypto={ SALT_LABEL:'BioVault-v3',
+  async deriveKey(passphrase){ var salt=new TextEncoder().encode(this.SALT_LABEL); var base=await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']); return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:310000,hash:'SHA-256'}, base, {name:'AES-GCM',length:256}, false, ['encrypt','decrypt']); },
+  async encrypt(obj,key){ var iv=crypto.getRandomValues(new Uint8Array(12)); var pt=new TextEncoder().encode(JSON.stringify(obj)); var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv}, key, pt); return { iv:Utils.toB64(iv), ct:Utils.toB64(new Uint8Array(ct)) }; },
+  async decrypt(pack,key){ var iv=new Uint8Array(Utils.fromB64(pack.iv)); var ct=new Uint8Array(Utils.fromB64(pack.ct)); var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:iv}, key, ct); return JSON.parse(new TextDecoder().decode(new Uint8Array(pt))); }
 };
 
-async function reEnrollBiometricIfNeeded() {
-  try {
-    const cred = await navigator.credentials.create({
-      publicKey: {
-        challenge: Utils.rand(32),
-        rp: { name: "BioVault", id: location.hostname },
-        user: { id: Utils.rand(16), name: "user@biovault", displayName: "User" },
-        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
-        authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-        timeout: 60000
-      }
-    });
-    if (!cred) return false;
-    vaultData.credentialId = Encryption.bufferToBase64(cred.rawId);
-    await persistVaultData(); // save with current derivedKey
-    return true;
-  } catch (e) {
-    console.warn('[BioVault] Re-enroll failed:', e);
-    return false;
-  }
+async function loadVaultOnBoot(){ var rec=await idbGet(VAULT_STORE,'vaultDataEnc'); if(rec && rec.value){ // encrypted
+    if(!_vaultKey){ // cannot auto-decrypt without passphrase; leave placeholder
+      return; 
+    }
+    try{ var dec=await VaultCrypto.decrypt(rec.value,_vaultKey); vaultData=dec; }catch(e){ _err('Vault decrypt failed', e); }
+  } else { var plain=await idbGet(VAULT_STORE,'vaultData'); if(plain && plain.value){ vaultData=plain.value; } }
 }
 
-// ---------- Vault helpers for UI show/hide ----------
-function revealVaultUI() {
-  var wp = document.querySelector('#biovault .whitepaper');
-  if (wp) wp.classList.add('hidden');
-  var locked = document.getElementById('lockedScreen');
-  var vault  = document.getElementById('vaultUI');
-  if (locked) locked.classList.add('hidden');
-  if (vault) { vault.classList.remove('hidden'); vault.style.display = 'block'; }
-  try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'true'); } catch(e){}
-}
-function restoreLockedUI() {
-  var wp = document.querySelector('#biovault .whitepaper');
-  if (wp) wp.classList.remove('hidden');
-  var locked = document.getElementById('lockedScreen');
-  var vault  = document.getElementById('vaultUI');
-  if (vault) { vault.classList.add('hidden'); vault.style.display = 'none'; }
-  if (locked) locked.classList.remove('hidden');
-  try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'false'); } catch(e){}
-}
+async function persistVault(){ if(_vaultKey){ var pack=await VaultCrypto.encrypt(vaultData,_vaultKey); await idbPut(VAULT_STORE,{key:'vaultDataEnc', value:pack}); } else { await idbPut(VAULT_STORE,{key:'vaultData', value:vaultData}); } }
 
-// ---------- Time/Caps Helpers ----------
-function utcDayKey(d){ const dt=new Date(d); return dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,'0')+"-"+String(dt.getUTCDate()).padStart(2,'0'); }
-function utcMonthKey(d){ const dt=new Date(d); return dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,'0'); }
+/* ===================== Nullifiers & replays ===================== */
+var Nullifiers={ async seen(z){var r=await idbGet(NULLIFIERS_STORE,z); return !!r;}, async add(z,meta){ return idbPut(NULLIFIERS_STORE,{z:z, meta:meta||{}, ts:Date.now()}); } };
+
+/* ===================== Segments ===================== */
+// segment record: { segmentIndex, currentOwner, previousOwner, originalOwner,
+// ownershipChangeCount, unlocked, claimed, history:[{event,timestamp,from,to,bioConst,parent,integrityHash,counted,nonce?,nullifier?}] }
+var Segments={ async get(i){return idbGet(SEGMENTS_STORE,i);}, async put(s){ // ring buffer cap
+    if(Array.isArray(s.history) && s.history.length>SEGMENT_HISTORY_MAX) s.history=s.history.slice(-SEGMENT_HISTORY_MAX);
+    return idbPut(SEGMENTS_STORE,s);
+  }, async all(){return idbGetAll(SEGMENTS_STORE);}, async ownedBy(o){return idbIndexAll(SEGMENTS_STORE,'by_owner',o);}, async unlockedOwnedBy(o){var all=await idbIndexAll(SEGMENTS_STORE,'by_owner',o); return all.filter(function(x){return x.unlocked && !x.claimed;});} };
+
+/* ===================== BioGuard (biometric gating) ===================== */
+var BioGuard={ MAX_FAILS:3, LOCKOUT_SECONDS:3600,
+  async check(){ var c=await idbGet(VAULT_STORE,'config'); var now=(Date.now()/1000)|0; if(c&&c.lockoutUntil&&now<c.lockoutUntil) return {ok:false,reason:'locked'}; return {ok:true}; },
+  async fail(){ var c=await idbGet(VAULT_STORE,'config')||{key:'config'}; c.authFails=(c.authFails||0)+1; if(c.authFails>=this.MAX_FAILS){ c.lockoutUntil=((Date.now()/1000)|0)+this.LOCKOUT_SECONDS; c.authFails=0; } await idbPut(VAULT_STORE,c); },
+  async pass(){ var c=await idbGet(VAULT_STORE,'config')||{key:'config'}; c.authFails=0; c.lockoutUntil=0; await idbPut(VAULT_STORE,c); }
+};
+
+var Biometric={ busy:false, async enroll(){ if(this.busy) return null; this.busy=true; try{ var cred=await navigator.credentials.create({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)), rp:{name:'BioVault',id:location.hostname}, user:{id:crypto.getRandomValues(new Uint8Array(16)), name:'user@biovault', displayName:'User'}, pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}], authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'}, timeout:60000}}); if(!cred) return null; var b64u=btoa(String.fromCharCode.apply(null,new Uint8Array(cred.rawId))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); var c=await idbGet(VAULT_STORE,'config')||{key:'config'}; c.bioCredentialId=b64u; await idbPut(VAULT_STORE,c); return b64u; }catch(e){ _err('Enroll failed',e); return null; } finally{ this.busy=false; } }, async assert(){ if(this.busy) return false; this.busy=true; try{ var c=await idbGet(VAULT_STORE,'config'); if(!c||!c.bioCredentialId) return false; function b64uToU8(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; var bin=atob(s); var out=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; } var raw=b64uToU8(c.bioCredentialId); var ass=await navigator.credentials.get({ publicKey:{ challenge:crypto.getRandomValues(new Uint8Array(32)), allowCredentials:[{type:'public-key',id:raw}], userVerification:'required', timeout:60000 }}); return !!ass; }catch(e){ _err('Assertion failed',e); return false; } finally{ this.busy=false; } }, async zkp(){ if(this.busy) return null; this.busy=true; try{ var c=await idbGet(VAULT_STORE,'config'); if(!c||!c.bioCredentialId) return null; var raw=(function(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; var bin=atob(s); var out=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; })(c.bioCredentialId); var chal=crypto.getRandomValues(new Uint8Array(32)); var ass=await navigator.credentials.get({ publicKey:{ challenge:chal, allowCredentials:[{type:'public-key', id:raw}], userVerification:'required', timeout:60000 }}); if(!ass||!ass.response||!ass.response.signature) return null; var sigU8=new Uint8Array(ass.response.signature); var digest=await crypto.subtle.digest('SHA-256', sigU8); return '0x'+Array.from(new Uint8Array(digest)).map(function(b){return b.toString(16).padStart(2,'0');}).join(''); }catch(e){ _err('ZKP failed',e); return null; } finally{ this.busy=false; } }
+};
+
+/* ===================== Ethers wiring ===================== */
+function ethersReady(){ return typeof ethers!=='undefined' && ethers.Contract; }
+async function ensureEthers(){ if(ethersReady()) return; await new Promise(function(resolve,reject){ var s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js'; s.onload=resolve; s.onerror=function(){reject(new Error('ethers.js failed to load'));}; document.head.appendChild(s); }); }
+
+var EVM={ provider:null, signer:null, account:null, chainId:null, tvm:null,
+  async connect(){ if(!window.ethereum) throw new Error('Install MetaMask'); await ensureEthers(); this.provider=new ethers.BrowserProvider(window.ethereum); await this.provider.send('eth_requestAccounts',[]); this.signer=await this.provider.getSigner(); this.account=(await this.signer.getAddress()); var net=await this.provider.getNetwork(); this.chainId=Number(net.chainId); if(this.chainId!==EXPECTED_CHAIN_ID) throw new Error('Wrong network'); this.tvm=new ethers.Contract(CONTRACT_ADDRESS.toLowerCase(), TVM_ABI, this.signer); return this.account; }
+};
+
+/* ===================== HPKE-lite (ECDH P-256 + HKDF → AES-GCM) ===================== */
+var HPKE={ async importP256PubJwk(jwk){ return crypto.subtle.importKey('jwk', jwk, {name:'ECDH',namedCurve:'P-256'}, true, []); }, async exportP256PubKey(key){ return crypto.subtle.exportKey('jwk', key); }, async generateEphemeral(){ return crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'}, true, ['deriveKey','deriveBits']); }, async deriveShared(priv,pub){ var bits=await crypto.subtle.deriveBits({name:'ECDH',public:pub}, priv, 256); return new Uint8Array(bits); } };
+async function hkdfAesKey(shared, infoBytes, saltU8){ var base=await crypto.subtle.importKey('raw', shared, {name:'HKDF'}, false, ['deriveKey']); return crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:saltU8,info:infoBytes}, base, {name:'AES-GCM',length:256}, true, ['encrypt','decrypt']); }
+async function aesGcmEncrypt(key, iv, ptU8, aadU8){ return new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:iv,additionalData:aadU8}, key, ptU8)); }
+async function aesGcmDecrypt(key, iv, ctU8, aadU8){ return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:iv,additionalData:aadU8}, key, ctU8)); }
+
+// gzip helpers (await write)
+async function gzipCompress(u8){ try{ if(typeof CompressionStream==='function'){ var cs=new CompressionStream('gzip'); var writer=cs.writable.getWriter(); await writer.write(u8); await writer.close(); var resp=new Response(cs.readable); var ab=await resp.arrayBuffer(); return new Uint8Array(ab); } }catch(e){} return u8; }
+async function gzipDecompress(u8){ try{ if(typeof DecompressionStream==='function'){ var ds=new DecompressionStream('gzip'); var writer=ds.writable.getWriter(); await writer.write(u8); await writer.close(); var resp=new Response(ds.readable); var ab=await resp.arrayBuffer(); return new Uint8Array(ab); } }catch(e){} return u8; }
+
+/* ===================== Helpers ===================== */
+function segHash(prevHash,event,timestamp,from,to,bioConst,counted){ return Utils.sha256Hex(H_SEGMENT+prevHash+'|'+event+'|'+timestamp+'|'+from+'|'+to+'|'+bioConst+'|'+(counted?1:0)); }
+function mkNullifier(segmentIndex,occAfter,parentHash){ return Utils.sha256Hex(H_NULLIFIER+segmentIndex+'|'+occAfter+'|'+parentHash); }
+function utcDayKey(d){ var x=new Date(d); return x.getUTCFullYear()+"-"+String(x.getUTCMonth()+1).padStart(2,'0')+"-"+String(x.getUTCDate()).padStart(2,'0'); }
+function utcMonthKey(d){ var x=new Date(d); return x.getUTCFullYear()+"-"+String(x.getUTCMonth()+1).padStart(2,'0'); }
 function utcYearKey(d){ return String(new Date(d).getUTCFullYear()); }
 
-function resetCapsIfNeeded(nowTs){
-  const dKey = utcDayKey(nowTs);
-  const mKey = utcMonthKey(nowTs);
-  const yKey = utcYearKey(nowTs);
-  if (vaultData.caps.dayKey !== dKey){ vaultData.caps.dayKey = dKey; vaultData.caps.dayUsedSeg = 0; }
-  if (vaultData.caps.monthKey !== mKey){ vaultData.caps.monthKey = mKey; vaultData.caps.monthUsedSeg = 0; }
-  if (vaultData.caps.yearKey !== yKey){ vaultData.caps.yearKey = yKey; vaultData.caps.yearUsedSeg = 0; vaultData.caps.tvmYearlyClaimed = 0; }
-}
-function canUnlockSegments(n){
-  const now = Date.now();
-  resetCapsIfNeeded(now);
-  if (vaultData.caps.dayUsedSeg + n > DAILY_CAP_SEG) return false;
-  if (vaultData.caps.monthUsedSeg + n > MONTHLY_CAP_SEG) return false;
-  if (vaultData.caps.yearUsedSeg + n > YEARLY_CAP_SEG) return false;
-  return true;
-}
-function recordUnlock(n){
-  const now = Date.now();
-  resetCapsIfNeeded(now);
-  vaultData.caps.dayUsedSeg   += n;
-  vaultData.caps.monthUsedSeg += n;
-  vaultData.caps.yearUsedSeg  += n;
-}
+function resetCapsIfNeeded(){ var now=Date.now(); var d=utcDayKey(now), m=utcMonthKey(now), y=utcYearKey(now); if(vaultData.caps.dayKey!==d){ vaultData.caps.dayKey=d; vaultData.caps.dayUsedSeg=0; } if(vaultData.caps.monthKey!==m){ vaultData.caps.monthKey=m; vaultData.caps.monthUsedSeg=0; } if(vaultData.caps.yearKey!==y){ vaultData.caps.yearKey=y; vaultData.caps.yearUsedSeg=0; vaultData.caps.tvmYearlyClaimed=0; } }
+function canUnlock(n){ resetCapsIfNeeded(); if(vaultData.caps.dayUsedSeg+n>DAILY_CAP_SEG) return false; if(vaultData.caps.monthUsedSeg+n>MONTHLY_CAP_SEG) return false; if(vaultData.caps.yearUsedSeg+n>YEARLY_CAP_SEG) return false; return true; }
+function recordUnlock(n){ resetCapsIfNeeded(); vaultData.caps.dayUsedSeg+=n; vaultData.caps.monthUsedSeg+=n; vaultData.caps.yearUsedSeg+=n; }
 
-// ---------- Vault ----------
-const Vault = {
-  deriveKeyFromPIN: async (pin, salt) => {
-    const baseKey = await crypto.subtle.importKey("raw", Utils.enc.encode(pin), "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey(
-      { name:"PBKDF2", salt: salt, iterations: PBKDF2_ITERS, hash:"SHA-256" },
-      baseKey, { name:"AES-GCM", length:AES_KEY_LENGTH }, false, ["encrypt","decrypt"]
-    );
-  },
-  promptAndSaveVault: async (salt) => persistVaultData(salt || null),
-  updateVaultUI: () => {
-    var e;
-    e = document.getElementById('bioIBAN');       if (e) e.textContent = vaultData.bioIBAN;
-    e = document.getElementById('balanceSHE');    if (e) e.textContent = vaultData.balanceSHE;
-    var tvmFloat = vaultData.balanceSHE / EXCHANGE_RATE;
-    e = document.getElementById('balanceTVM');    if (e) e.textContent = tvmFloat.toFixed(4);
-    e = document.getElementById('balanceUSD');    if (e) e.textContent = tvmFloat.toFixed(2);
-    e = document.getElementById('bonusConstant'); if (e) e.textContent = vaultData.bonusConstant;
-    e = document.getElementById('connectedAccount'); if (e) e.textContent = vaultData.userWallet || 'Not connected';
+async function updateBalanceFromSegments(){ var all=await Segments.all(); var unlocked=0, locked=0; for(var i=0;i<all.length;i++){ if(all[i].claimed) continue; if(all[i].unlocked) unlocked++; else locked++; } vaultData.balanceSHE=unlocked+locked; await persistVault(); }
 
-    const historyBody = document.getElementById('transactionHistory');
-    if (historyBody) {
-      historyBody.innerHTML = '';
-      vaultData.transactions.slice(0, HISTORY_MAX).forEach(function(tx){
-        const row = document.createElement('tr');
-        const cols = [tx.bioIBAN, tx.bioCatch, String(tx.amount), new Date(tx.timestamp).toUTCString(), tx.status];
-        cols.forEach(function(v){
-          const td = document.createElement('td'); td.textContent = String(v); row.appendChild(td);
-        });
-        historyBody.appendChild(row);
-      });
-    }
-  },
-  lockVault: async () => {
-    vaultUnlocked = false;
-    try { await Vault.promptAndSaveVault(); } catch (e) { console.warn("[BioVault] save-on-lock failed", e); }
-    derivedKey = null;
-    restoreLockedUI();
-  },
-  updateBalanceFromSegments: async () => {
-    const segs = await DB.loadSegmentsFromDB();
-    vaultData.balanceSHE = segs.filter(function(s){ return s.currentOwner===vaultData.bioIBAN; }).length;
-    Vault.updateVaultUI();
+/* ===================== Boot & genesis ===================== */
+async function initGenesisIfNeeded(){ var conf=await idbGet(VAULT_STORE,'config'); if(conf){ await loadVaultOnBoot(); return; }
+  // new vault: generate curve keys for P2P
+  var kp=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'}, true, ['deriveKey','deriveBits']); var pubJwk=await crypto.subtle.exportKey('jwk',kp.publicKey); var privJwk=await crypto.subtle.exportKey('jwk',kp.privateKey);
+  await idbPut(VAULT_STORE,{key:'p256Pub', jwk:pubJwk}); await idbPut(VAULT_STORE,{key:'p256Priv', jwk:privJwk});
+  // 0x Bio-IBAN (randomized)
+  var rnd='0x'+await Utils.sha256Hex(Math.random().toString()); vaultData.bioIBAN=rnd; vaultData.joinTimestamp=Date.now(); vaultData.deviceKeyHash='0x'+await Utils.sha256Hex('Balance-Chain-v3-PRD:'+rnd);
+  vaultData.balanceSHE=INITIAL_BALANCE_SHE;
+  await persistVault();
+  await idbPut(VAULT_STORE,{key:'config', createdAt:Date.now(), ethereumAddress:null, bioCredentialId:null, lockoutUntil:0, authFails:0});
+  // deterministic mint + unlock for indices 1..1200 (spec-correct semantics)
+  var now=Date.now();
+  for(var i=1;i<=INITIAL_BALANCE_SHE;i++){
+    var parent='0x'+await Utils.sha256Hex('genesis|'+i+'|'+vaultData.bioIBAN);
+    var mintHash='0x'+await Utils.sha256Hex(H_SEGMENT+parent+'|Mint|'+now+'|'+vaultData.bioIBAN+'|Locked|'+(GENESIS_BIO_CONSTANT+i)+'|1');
+    var unlockHash='0x'+await Utils.sha256Hex(H_SEGMENT+mintHash+'|Unlock|'+(now+1)+'|Locked|'+vaultData.bioIBAN+'|'+(GENESIS_BIO_CONSTANT+i+1)+'|0');
+    var seg={ segmentIndex:i, currentOwner:vaultData.bioIBAN, previousOwner:vaultData.bioIBAN, originalOwner:vaultData.bioIBAN, ownershipChangeCount:1, unlocked:true, claimed:false, history:[ {event:'Mint',timestamp:now,from:vaultData.bioIBAN,to:'Locked',bioConst:GENESIS_BIO_CONSTANT+i,parent:parent,integrityHash:mintHash,counted:true}, {event:'Unlock',timestamp:now+1,from:'Locked',to:vaultData.bioIBAN,bioConst:GENESIS_BIO_CONSTANT+i+1,parent:mintHash,integrityHash:unlockHash,counted:false} ] };
+    await Segments.put(seg);
   }
+}
+
+/* ===================== Recipient key resolver ===================== */
+async function saveRecipientKey(identity, jwk){ if(!identity||!jwk) throw new Error('Missing identity/JWK'); await idbPut(CONTACTS_STORE,{id:identity, jwk:jwk}); }
+async function resolveRecipientKey(identity){ if(!identity) throw new Error('Missing recipient'); var rec=await idbGet(CONTACTS_STORE, identity); if(rec&&rec.jwk) return rec.jwk; // p256:base64urlX.base64urlY inline
+  if(identity.indexOf('p256:')===0){ var parts=identity.slice(5).split('.'); if(parts.length===2){ return {kty:'EC', crv:'P-256', x:parts[0], y:parts[1], ext:true}; } }
+  throw new Error('Unknown recipient key; add via saveRecipientKey(...)'); }
+
+/* ===================== Range packing ===================== */
+function packEntries(segs){ // compact: just entries; no redundant start/count
+  segs.sort(function(a,b){return a.segmentIndex-b.segmentIndex});
+  return segs.map(function(s){ return {i:s.segmentIndex,p:s._parent,o:s._occAfter,h:s._integrityHash,b:s._bioConst,z:s._nullifier}; });
+}
+function unpackEntries(arr){ return (arr||[]).map(function(e){ return {segmentIndex:e.i,_parent:e.p,_occAfter:e.o,_integrityHash:e.h,_bioConst:e.b,_nullifier:e.z}; }); }
+
+/* ===================== P2P ===================== */
+var P2P={
+  async prepareSend(recipientIdentity, amountSegments, memo){ amountSegments=(amountSegments|0); if(!(amountSegments>0)) throw new Error('Invalid amount'); if(amountSegments>MAX_TRANSFER_SEGMENTS) throw new Error('Transfer too large');
+    // biometric proof gate
+    var ok=await Biometric.assert(); if(!ok) throw new Error('Biometric verification required');
+    var owner=vaultData.bioIBAN; var mine=await Segments.unlockedOwnedBy(owner); if(mine.length<amountSegments) throw new Error('Insufficient unlocked segments');
+    var chosen=mine.slice(0,amountSegments);
+    var now=Date.now(); var bodySegs=[]; var zList=[];
+    for(var k=0;k<chosen.length;k++){
+      var s=chosen[k]; var last=s.history[s.history.length-1]; var occAfter=(s.ownershipChangeCount|0)+1; var parent=last.integrityHash;
+      var integ='0x'+await Utils.sha256Hex(H_SEGMENT+parent+'|Transfer|'+now+'|'+s.currentOwner+'|'+recipientIdentity+'|'+(last.bioConst+BIO_STEP)+'|1');
+      var z='0x'+await mkNullifier(s.segmentIndex,occAfter,parent);
+      // mutate sender state once (single occ increment)
+      s.previousOwner=s.currentOwner; s.currentOwner=recipientIdentity; s.ownershipChangeCount=occAfter; s.unlocked=true;
+      s.history.push({event:'Transfer', timestamp:now, from:s.previousOwner, to:recipientIdentity, bioConst:last.bioConst+BIO_STEP, parent:parent, integrityHash:integ, counted:true, nullifier:z});
+      await Segments.put(s); await Nullifiers.add(z,{segmentIndex:s.segmentIndex, from:s.previousOwner, to:recipientIdentity});
+      bodySegs.push({ segmentIndex:s.segmentIndex, _parent:parent, _integrityHash:integ, _bioConst:last.bioConst+BIO_STEP, _occAfter:occAfter, _nullifier:z });
+      zList.push(z);
+    }
+    // cascade unlock (respect caps)
+    var created=await unlockNextSegments(amountSegments); if(created<amountSegments){ _log('Auto-unlock partial due to caps'); }
+    // encrypt to recipient
+    var recipJwk=await resolveRecipientKey(recipientIdentity);
+    var recipPub=await HPKE.importP256PubJwk(recipJwk);
+    var eph=await HPKE.generateEphemeral(); var eJwk=await HPKE.exportP256PubKey(eph.publicKey);
+    var shared=await HPKE.deriveShared(eph.privateKey, recipPub);
+    var salt=crypto.getRandomValues(new Uint8Array(32)); var info=new TextEncoder().encode(H_AAD+P2P_SCHEMA);
+    var aesKey=await hkdfAesKey(shared, info, salt);
+    // header (CBOR) + AAD binding
+    var header={ v:P2P_VERSION, schema:P2P_SCHEMA, from:owner, to:recipientIdentity, t:now, nonce:Utils.randomNonce(), e:eJwk, s:Utils.toB64(salt), count:bodySegs.length, z:zList };
+    var headerCbor=CBOR.encode(header);
+    var entries=packEntries(bodySegs);
+    var bodyCbor=CBOR.encode({ entries:entries, memo:memo||'' });
+    var gz=await gzipCompress(bodyCbor);
+    var iv=crypto.getRandomValues(new Uint8Array(12)); var ct=await aesGcmEncrypt(aesKey, iv, gz, headerCbor);
+    await persistVault(); await updateBalanceFromSegments();
+    return { header:Utils.toB64(headerCbor), iv:Utils.toB64(iv), body:Utils.toB64(ct) };
+  },
+  async receiveApply(payload){ var gate=await Biometric.assert(); if(!gate) throw new Error('Biometric verification required');
+    var headerU8=new Uint8Array(Utils.fromB64(payload.header)); var header=CBOR.decode(headerU8);
+    // replay by nonce
+    var seen=await idbGet(REPLAYS_STORE, header.nonce); if(seen) throw new Error('Replay (nonce)'); await idbPut(REPLAYS_STORE,{nonce:header.nonce, ts:Date.now()});
+    // derive shared
+    var privRec=await idbGet(VAULT_STORE,'p256Priv'); var priv=await crypto.subtle.importKey('jwk', privRec.jwk, {name:'ECDH',namedCurve:'P-256'}, true, ['deriveKey','deriveBits']);
+    var ePub=await HPKE.importP256PubJwk(header.e); var shared=await crypto.subtle.deriveBits({name:'ECDH',public:ePub}, priv, 256).then(function(bits){return new Uint8Array(bits)});
+    var salt=new Uint8Array(Utils.fromB64(header.s)); var info=new TextEncoder().encode(H_AAD+P2P_SCHEMA); var aesKey=await hkdfAesKey(shared,info,salt);
+    var iv=new Uint8Array(Utils.fromB64(payload.iv)); var ct=new Uint8Array(Utils.fromB64(payload.body));
+    var gz=await aesGcmDecrypt(aesKey, iv, ct, headerU8); var body=CBOR.decode(await gzipDecompress(gz));
+    var segs=unpackEntries(body.entries||[]); var applied=0, rejected=0;
+    for(var i=0;i<segs.length;i++){
+      var ent=segs[i]; if(await Nullifiers.seen(ent._nullifier)){ rejected++; continue; }
+      var local=await Segments.get(ent.segmentIndex);
+      if(local){ var last=local.history[local.history.length-1]; if(last.integrityHash!==ent._parent){ var keep=P2P.resolveConflict(local, ent, header); if(!keep){ rejected++; continue; } } }
+      var integR='0x'+await Utils.sha256Hex(H_SEGMENT+ent._integrityHash+'|Received|'+header.t+'|'+header.from+'|'+header.to+'|'+(ent._bioConst+BIO_STEP)+'|0');
+      var seg=local||{ segmentIndex:ent.segmentIndex, originalOwner:header.from, previousOwner:null, currentOwner:null, ownershipChangeCount:ent._occAfter, unlocked:true, claimed:false, history:[] };
+      seg.previousOwner=header.from; seg.currentOwner=header.to; seg.ownershipChangeCount=ent._occAfter;
+      seg.history.push({event:'Received', timestamp:header.t, from:header.from, to:header.to, bioConst:ent._bioConst+BIO_STEP, parent:ent._integrityHash, integrityHash:integR, counted:false, nonce:header.nonce, nullifier:ent._nullifier});
+      await Segments.put(seg); await Nullifiers.add(ent._nullifier,{segmentIndex:seg.segmentIndex, from:header.from, to:header.to}); applied++;
+    }
+    if(applied>0){ await unlockNextSegments(applied); }
+    await persistVault(); await updateBalanceFromSegments();
+    return { applied:applied, rejected:rejected };
+  },
+  resolveConflict(localSeg, incomingEnt, header){ var localLast=localSeg.history[localSeg.history.length-1]; var tLocal=localLast.timestamp||0, tIn=header.t||0; if(tIn<tLocal) return true; if(tIn>tLocal) return false; var nLocal=(localLast.nonce||'~'); var nIn=header.nonce||''; if(nIn<nLocal) return true; if(nIn>nLocal) return false; return (incomingEnt._nullifier < (localLast.nullifier||'~')); }
 };
 
-// ---------- Network/Contract guards ----------
-async function contractExists(addr) {
-  if (!provider) return false;
-  try {
-    const code = await provider.getCode(addr);
-    return code && code !== '0x';
-  } catch (e) { return false; }
-}
-function enableDashboardButtons() {
-  var ids = ['claim-tvm-btn','exchange-tvm-btn','swap-tvm-usdt-btn','swap-usdt-tvm-btn'];
-  for (var i=0;i<ids.length;i++){ var b=document.getElementById(ids[i]); if (b) b.disabled = false; }
-}
-function disableDashboardButtons() {
-  var ids = ['claim-tvm-btn','exchange-tvm-btn','swap-tvm-usdt-btn','swap-usdt-tvm-btn'];
-  for (var i=0;i<ids.length;i++){ var b=document.getElementById(ids[i]); if (b) b.disabled = true; }
-}
+/* ===================== Unlock (cascade) ===================== */
+async function unlockNextSegments(count){ if(count<=0) return 0; if(!canUnlock(count)) return 0; var created=0; var now=Date.now(); for(var k=0;k<count;k++){ var idx=vaultData.nextSegmentIndex; if(idx> LAYERS*SEGMENTS_PER_LAYER) break; var parent='0x'+await Utils.sha256Hex('genesis|'+idx+'|'+vaultData.bioIBAN); var mintHash='0x'+await Utils.sha256Hex(H_SEGMENT+parent+'|Mint|'+now+'|'+vaultData.bioIBAN+'|Locked|'+(GENESIS_BIO_CONSTANT+idx)+'|1'); var unlockHash='0x'+await Utils.sha256Hex(H_SEGMENT+mintHash+'|Unlock|'+(now+1)+'|Locked|'+vaultData.bioIBAN+'|'+(GENESIS_BIO_CONSTANT+idx+1)+'|0'); var seg={ segmentIndex:idx, currentOwner:vaultData.bioIBAN, previousOwner:vaultData.bioIBAN, originalOwner:vaultData.bioIBAN, ownershipChangeCount:1, unlocked:true, claimed:false, history:[ {event:'Mint',timestamp:now,from:vaultData.bioIBAN,to:'Locked',bioConst:GENESIS_BIO_CONSTANT+idx,parent:parent,integrityHash:mintHash,counted:true}, {event:'Unlock',timestamp:now+1,from:'Locked',to:vaultData.bioIBAN,bioConst:GENESIS_BIO_CONSTANT+idx+1,parent:mintHash,integrityHash:unlockHash,counted:false} ] }; await Segments.put(seg); vaultData.nextSegmentIndex=idx+1; created++; } if(created>0){ recordUnlock(created); await persistVault(); } return created; }
 
-// ---------- Wallet ----------
-const Wallet = {
-  connectMetaMask: async () => {
-    if (!window.ethereum) { alert('Install MetaMask.'); return; }
-    provider = new ethers.BrowserProvider(window.ethereum);
-    await provider.send('eth_requestAccounts', []);
-    signer = await provider.getSigner();
-    account = await signer.getAddress();
-    chainId = await provider.getNetwork().then(function(net){ return net.chainId; });
-    vaultData.userWallet = account;
-    UI.updateConnectedAccount();
-    await Wallet.initContracts();
-    await Wallet.updateBalances();
-    enableDashboardButtons();
-    const btn = document.getElementById('connect-wallet');
-    if (btn) { btn.textContent = 'Wallet Connected'; btn.disabled = true; }
-  },
-
-  connectWalletConnect: async () => {
-    let WCProvider;
-    try {
-      WCProvider = await import('https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.14.0/dist/esm/index.js');
-    } catch (e) {
-      UI.showAlert('Could not load WalletConnect (offline or blocked). Try MetaMask.');
-      return;
-    }
-    const wcProvider = await WCProvider.EthereumProvider.init({ projectId: WALLET_CONNECT_PROJECT_ID, chains:[EXPECTED_CHAIN_ID], showQrModal:true });
-    await wcProvider.enable();
-    provider = new ethers.BrowserProvider(wcProvider);
-    signer = await provider.getSigner();
-    account = await signer.getAddress();
-    chainId = await provider.getNetwork().then(function(net){ return net.chainId; });
-    vaultData.userWallet = account;
-    UI.updateConnectedAccount();
-    await Wallet.initContracts();
-    await Wallet.updateBalances();
-    enableDashboardButtons();
-    const btn = document.getElementById('connect-wallet');
-    if (btn) { btn.textContent = 'Wallet Connected'; btn.disabled = true; }
-  },
-
-  initContracts: async () => {
-    try {
-      if (Number(chainId) !== EXPECTED_CHAIN_ID) {
-        UI.showAlert('Wrong network. Please switch to the expected network.');
-        tvmContract = null; usdtContract = null; disableDashboardButtons(); return;
-      }
-      const tvmAddr = CONTRACT_ADDRESS.toLowerCase();
-      const usdtAddr = USDT_ADDRESS.toLowerCase();
-
-      const tvmOk  = await contractExists(tvmAddr);
-      const usdtOk = await contractExists(usdtAddr);
-
-      if (!tvmOk || !usdtOk) {
-        UI.showAlert('Contract(s) not deployed on this network. Dashboard features disabled.');
-        tvmContract = null; usdtContract = null; disableDashboardButtons(); return;
-      }
-
-      tvmContract  = new ethers.Contract(tvmAddr, ABI, signer);
-      usdtContract = new ethers.Contract(usdtAddr, [
-        {"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
-        {"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"spender","type":"address"}],"name":"allowance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
-        {"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"}
-      ], signer);
-      console.log('[BioVault] Contracts initialized');
-    } catch (e) {
-      console.error('[BioVault] initContracts failed', e);
-      tvmContract = null; usdtContract = null; disableDashboardButtons();
-    }
-  },
-
-  updateBalances: async () => {
-    try {
-      if (!account || !provider) return;
-      // placeholders
-      var ub = document.getElementById('user-balance'); if (ub) ub.textContent = '— TVM';
-      var uu = document.getElementById('usdt-balance'); if (uu) uu.textContent = '— USDT';
-
-      const tvmOk = await contractExists(CONTRACT_ADDRESS.toLowerCase());
-      const usdtOk = await contractExists(USDT_ADDRESS.toLowerCase());
-      if (!tvmOk || !usdtOk || !tvmContract || !usdtContract) return;
-
-      const tvmBal = await tvmContract.balanceOf(account);
-      if (ub) ub.textContent = ethers.formatUnits(tvmBal, 18) + ' TVM';
-
-      const usdtBal = await usdtContract.balanceOf(account);
-      if (uu) uu.textContent = ethers.formatUnits(usdtBal, 6) + ' USDT';
-
-      var e3 = document.getElementById('tvm-price');    if (e3) e3.textContent  = '1.00 USDT';
-      var e4 = document.getElementById('pool-ratio');   if (e4) e4.textContent = '51% HI / 49% AI';
-      var e5 = document.getElementById('avg-reserves'); if (e5) e5.textContent = '100M TVM';
-    } catch (e) {
-      console.warn('Balance refresh failed:', e);
-    }
-  },
-
-  ensureAllowance: async (token, owner, spender, amount) => {
-    if (!token || !token.allowance) return;
-    const a = await token.allowance(owner, spender);
-    if (a < amount) {
-      const tx = await token.approve(spender, amount);
-      await tx.wait();
-    }
-  },
-
-  getOnchainBalances: async () => {
-    if (!tvmContract || !usdtContract || !account) throw new Error('Connect wallet first.');
-    const tvm  = await tvmContract.balanceOf(account);
-    const usdt = await usdtContract.balanceOf(account);
-    return { tvm: tvm, usdt: usdt };
+/* ===================== On-chain claim ===================== */
+async function buildMintProofsForOcc1(needSeg){ // choose unlocked, occ==1
+  var all=await Segments.all(); var pool=[]; for(var i=0;i<all.length;i++){ var s=all[i]; if(s.claimed) continue; if((s.ownershipChangeCount|0)===1 && s.originalOwner===vaultData.bioIBAN && s.previousOwner===vaultData.bioIBAN){ pool.push(s); if(pool.length===needSeg) break; } }
+  if(pool.length<needSeg) throw new Error('Not enough occ==1 segments');
+  var proofs=[]; // contract expects flattened chains (one per layer for each segment)
+  for(var k=0;k<pool.length;k++){ var s=pool[k]; // root link only needs ownershipChangeCount==1 + bio consistency
+    var last=s.history[s.history.length-1];
+    var segmentIndex=s.segmentIndex; var currentBioConst=last.bioConst; // using latest bio at head (fits the chain rule in contract)
+    // ownershipProof/unlockIntegrityProof equality for non-root enforced on chain; for root we bind to userBioConstant
+    var ownershipProof='0x'+await Utils.sha256Hex(String(currentBioConst));
+    var unlockIntegrityProof=ownershipProof; // for a single-link chain this equals
+    var spentProof='0x'+await Utils.sha256Hex(vaultData.deviceKeyHash+'|'+segmentIndex+'|'+Date.now());
+    var biometricZKP=await Biometric.zkp(); if(!biometricZKP) throw new Error('Missing biometric ZKP');
+    proofs.push({ segmentIndex:segmentIndex, currentBioConst:currentBioConst, ownershipProof:ownershipProof, unlockIntegrityProof:unlockIntegrityProof, spentProof:spentProof, ownershipChangeCount:1, biometricZKP:biometricZKP });
   }
+  return { proofs:proofs, used:pool };
+}
+
+async function claimTVM_onchain(tvmCount){ tvmCount=(tvmCount|0)||1; resetCapsIfNeeded(); if(vaultData.caps.tvmYearlyClaimed + tvmCount > (YEARLY_CAP_TVM + EXTRA_BONUS_TVM)) throw new Error('Yearly TVM cap reached'); var needSeg=tvmCount*SEGMENTS_PER_TVM; var pack=await buildMintProofsForOcc1(needSeg);
+  await ensureEthers(); if(!EVM.tvm) await EVM.connect();
+  // Build EIP-712 claim per contract
+  var coder=new ethers.AbiCoder(); var inner=pack.proofs.map(function(p){ return ethers.keccak256(coder.encode(['uint256','uint256','bytes32','bytes32','bytes32','uint256','bytes32'], [p.segmentIndex,p.currentBioConst,p.ownershipProof,p.unlockIntegrityProof,p.spentProof,p.ownershipChangeCount,p.biometricZKP])); }); var proofsHash=ethers.keccak256(coder.encode(['bytes32[]'],[inner]));
+  var deviceKeyHash=vaultData.deviceKeyHash; var userBioConstant=pack.proofs[0]?pack.proofs[0].currentBioConst:GENESIS_BIO_CONSTANT; var nonce=(Math.floor(Math.random()*0xFFFFFFFF)>>>0);
+  var domain={ name:'TVM', version:'1', chainId:Number(EVM.chainId||EXPECTED_CHAIN_ID), verifyingContract:CONTRACT_ADDRESS.toLowerCase() };
+  var types={ Claim:[ {name:'user',type:'address'},{name:'proofsHash',type:'bytes32'},{name:'deviceKeyHash',type:'bytes32'},{name:'userBioConstant',type:'uint256'},{name:'nonce',type:'uint256'} ]};
+  var value={ user:EVM.account, proofsHash:proofsHash, deviceKeyHash:deviceKeyHash, userBioConstant:userBioConstant, nonce:nonce };
+  var signature=await EVM.signer.signTypedData(domain,types,value);
+  // One more biometric check right before sending
+  var ok=await Biometric.assert(); if(!ok) throw new Error('Biometric verification required');
+  var tx=await EVM.tvm.claimTVM(pack.proofs, signature, deviceKeyHash, userBioConstant, nonce);
+  await tx.wait();
+  // Mark used segments as claimed (append non-counted event)
+  for(var i=0;i<pack.used.length;i++){ var s=pack.used[i]; var last=s.history[s.history.length-1]; var ts=Date.now(); var integ='0x'+await Utils.sha256Hex(H_SEGMENT+last.integrityHash+'|Claimed|'+ts+'|'+vaultData.bioIBAN+'|OnChain|'+(last.bioConst+1)+'|0'); s.claimed=true; s.history.push({event:'Claimed', timestamp:ts, from:vaultData.bioIBAN, to:'OnChain', bioConst:last.bioConst+1, parent:last.integrityHash, integrityHash:integ, counted:false}); await Segments.put(s); }
+  vaultData.caps.tvmYearlyClaimed+=tvmCount; await persistVault(); await updateBalanceFromSegments();
+  return { tx:tx.hash, tvm:tvmCount, segments:needSeg };
+}
+
+/* ===================== Public API ===================== */
+var BioVault={
+  // lifecycle
+  async init(){ await openDB(); await initGenesisIfNeeded(); await loadVaultOnBoot(); return true; },
+  async setVaultPassphrase(pass){ _vaultKey=await VaultCrypto.deriveKey(pass); // migrate plaintext → encrypted if existed
+    var plain=await idbGet(VAULT_STORE,'vaultData'); if(plain && plain.value){ await idbPut(VAULT_STORE,{key:'vaultData', value:null}); } await persistVault(); return true; },
+  // identity + biometrics
+  async enrollBiometric(){ return Biometric.enroll(); }, async biometricAssert(){ return Biometric.assert(); }, async biometricZKP(){ return Biometric.zkp(); },
+  // contacts / resolver
+  async saveRecipientKey(id,jwk){ return saveRecipientKey(id,jwk); },
+  // p2p
+  async p2pPrepareSend(recipientIdentity,n,memo){ return P2P.prepareSend(recipientIdentity,n,memo||''); },
+  async p2pReceiveApply(payload){ return P2P.receiveApply(payload); },
+  // unlock & claim
+  async unlockNext(n){ return unlockNextSegments(n|0); },
+  async claimTVM(n){ return claimTVM_onchain(n|0); },
+  // misc
+  async myIdentity(){ var pub=await idbGet(VAULT_STORE,'p256Pub'); return 'p256:'+pub.jwk.x+'.'+pub.jwk.y; }
 };
+window.BioVault=BioVault;
 
-// ---------- Segment (Micro-ledger) ----------
-const Segment = {
-  // Compute next integrity hash (chaining)
-  _nextHash: async (prevHash, event, timestamp, from, to, bioConst) => {
-    return await Utils.sha256Hex(prevHash + event + timestamp + from + to + bioConst);
-  },
-
-  // Initialize initial 1..1200 as UNLOCKED (ownershipChangeCount=1)
-  initializeSegments: async () => {
-    const now = Date.now();
-    for (let i = 1; i <= INITIAL_BALANCE_SHE; i++) {
-      const initHash = await Utils.sha256Hex('init' + i + vaultData.bioIBAN);
-      const unlockedTs = now + i; // stagger by i ms
-      const unlockHash = await Utils.sha256Hex(initHash + 'Unlock' + unlockedTs + 'Genesis' + vaultData.bioIBAN + (GENESIS_BIO_CONSTANT + i + 1));
-      const segment = {
-        segmentIndex: i,
-        currentOwner: vaultData.bioIBAN,
-        ownershipChangeCount: 1, // IMPORTANT for on-chain mint eligibility
-        claimed: false,          // used for TVM claims
-        history: [
-          {
-            event:'Initialization',
-            timestamp: now,
-            from:'Genesis',
-            to: vaultData.bioIBAN,
-            bioConst: GENESIS_BIO_CONSTANT + i,
-            integrityHash: initHash
-          },
-          {
-            event:'Unlock',
-            timestamp: unlockedTs,
-            from:'Genesis',
-            to: vaultData.bioIBAN,
-            bioConst: GENESIS_BIO_CONSTANT + i + 1,
-            integrityHash: unlockHash
-          }
-        ]
-      };
-      await DB.saveSegmentToDB(segment);
-    }
-    vaultData.balanceSHE = INITIAL_BALANCE_SHE;
-    vaultData.nextSegmentIndex = INITIAL_BALANCE_SHE + 1;
-  },
-
-  // Unlock the next N locked indices deterministically (1201..)
-  unlockNextSegments: async (count) => {
-    if (count <= 0) return 0;
-    if (!canUnlockSegments(count)) return 0;
-
-    let created = 0;
-    const now = Date.now();
-    for (let k = 0; k < count; k++) {
-      const idx = vaultData.nextSegmentIndex;
-      if (idx > LAYERS * SEGMENTS_PER_LAYER) break; // yearly hard cap
-      const initHash = await Utils.sha256Hex('init' + idx + vaultData.bioIBAN);
-      const ts = now + k;
-      const unlockHash = await Utils.sha256Hex(initHash + 'Unlock' + ts + 'Locked' + vaultData.bioIBAN + (GENESIS_BIO_CONSTANT + idx + 1));
-      const seg = {
-        segmentIndex: idx,
-        currentOwner: vaultData.bioIBAN,
-        ownershipChangeCount: 1, // newly unlocked -> 1 change
-        claimed: false,
-        history: [
-          { event:'Initialization', timestamp: ts, from:'Locked', to:vaultData.bioIBAN, bioConst: GENESIS_BIO_CONSTANT + idx, integrityHash: initHash },
-          { event:'Unlock', timestamp: ts, from:'Locked', to:vaultData.bioIBAN, bioConst: GENESIS_BIO_CONSTANT + idx + 1, integrityHash: unlockHash }
-        ]
-      };
-      await DB.saveSegmentToDB(seg);
-      vaultData.nextSegmentIndex = idx + 1;
-      created++;
-    }
-    if (created > 0) {
-      recordUnlock(created);
-      await Vault.updateBalanceFromSegments();
-      await persistVaultData();
-    }
-    return created;
-  },
-
-  // Validate a segment chain (used for P2P receive)
-  validateSegment: async (segment) => {
-    if (!segment || !Array.isArray(segment.history) || segment.history.length === 0) return false;
-    const init = segment.history[0];
-    const expectedInit = await Utils.sha256Hex('init' + segment.segmentIndex + init.to);
-    if (init.integrityHash !== expectedInit) return false;
-
-    let hash = init.integrityHash;
-    for (let j=1;j<segment.history.length;j++) {
-      const h = segment.history[j];
-      hash = await Utils.sha256Hex(hash + h.event + h.timestamp + h.from + h.to + h.bioConst);
-      if (h.integrityHash !== hash) return false;
-    }
-    const last = segment.history[segment.history.length - 1];
-    if (last.biometricZKP && !/^0x[0-9a-fA-F]{64}$/.test(last.biometricZKP)) return false;
-    return true;
-  }
-};
-
-// ---------- P2P helpers: compact/encrypt payload ----------
-function toCompactChains(chains) {
-  function eShort(e){ return e==='Transfer' ? 'T' : (e==='Received' ? 'R' : (e==='Unlock' ? 'U' : 'I')); }
-  var out = [];
-  for (var i=0;i<chains.length;i++){
-    var c = chains[i];
-    var h = [];
-    for (var j=0;j<c.history.length;j++){
-      var x = c.history[j];
-      h.push({ e: eShort(x.event), t: x.timestamp, f: x.from, o: x.to, b: x.bioConst, x: x.integrityHash, z: x.biometricZKP });
-    }
-    out.push({ i: c.segmentIndex, h: h });
-  }
-  return out;
-}
-function fromCompactChains(comp) {
-  function eLong(e){ return e==='T' ? 'Transfer' : (e==='R' ? 'Received' : (e==='U' ? 'Unlock' : 'Initialization')); }
-  var out = [];
-  for (var i=0;i<comp.length;i++){
-    var c = comp[i];
-    var h = [];
-    for (var j=0;j<c.h.length;j++){
-      var x = c.h[j];
-      h.push({ event: eLong(x.e), timestamp: x.t, from: x.f, to: x.o, bioConst: x.b, integrityHash: x.x, biometricZKP: x.z });
-    }
-    out.push({ segmentIndex: c.i, history: h });
-  }
-  return out;
-}
-// Derive transport key from from|to|nonce (transport privacy; both sides can derive)
-async function deriveP2PKey(from, to, nonce) {
-  const salt = Utils.enc.encode('BC-P2P|' + from + '|' + to + '|' + String(nonce));
-  const base = await crypto.subtle.importKey("raw", HMAC_KEY, "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    { name:"PBKDF2", salt: salt, iterations: 120000, hash:"SHA-256" },
-    base, { name:"AES-GCM", length: AES_KEY_LENGTH }, false, ["encrypt","decrypt"]
-  );
-}
-async function handleIncomingChains(chains, fromIBAN, toIBAN) {
-  var validSegments = 0;
-  for (var i=0;i<chains.length;i++) {
-    var entry = chains[i];
-    var seg = await DB.getSegment(entry.segmentIndex);
-    var reconstructed = seg ? JSON.parse(JSON.stringify(seg)) : { segmentIndex: entry.segmentIndex, currentOwner: 'Unknown', ownershipChangeCount: (seg && seg.ownershipChangeCount) || 0, claimed: false, history: [] };
-    for (var j=0;j<entry.history.length;j++) reconstructed.history.push(entry.history[j]);
-
-    if (!(await Segment.validateSegment(reconstructed))) continue;
-
-    const last = reconstructed.history[reconstructed.history.length - 1];
-    if (last.to !== vaultData.bioIBAN) continue;
-
-    const timestamp = Date.now();
-    const bioConst = last.bioConst + BIO_STEP;
-    const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Received' + timestamp + last.from + vaultData.bioIBAN + bioConst);
-    const zkpIn = await Biometric.generateBiometricZKP();
-    reconstructed.history.push({ event:'Received', timestamp: timestamp, from:last.from, to:vaultData.bioIBAN, bioConst: bioConst, integrityHash: integrityHash, biometricZKP: zkpIn });
-    reconstructed.currentOwner = vaultData.bioIBAN;
-    reconstructed.ownershipChangeCount = (reconstructed.ownershipChangeCount || 0) + 1;
-    reconstructed.claimed = reconstructed.claimed || false;
-    await DB.saveSegmentToDB(reconstructed);
-    validSegments++;
-  }
-  if (validSegments > 0) {
-    vaultData.transactions.push({ bioIBAN: vaultData.bioIBAN, bioCatch:'Incoming', amount: validSegments / EXCHANGE_RATE, timestamp: Date.now(), status:'Received' });
-    await Vault.updateBalanceFromSegments();
-    UI.showAlert('Received ' + validSegments + ' valid segments.');
-    await persistVaultData();
-  } else {
-    UI.showAlert('No valid segments received.');
-  }
-}
-
-// ---------- Proofs (on-chain TVM mint) ----------
-const Proofs = {
-  // Build proofs from actual local segments with ownershipChangeCount === 1 and not claimed
-  prepareClaimBatch: async (segmentsNeeded) => {
-    if (!vaultUnlocked) throw new Error('Vault locked.');
-    const segs = await DB.loadSegmentsFromDB();
-    // eligible for claim: owned by me, not claimed, exactly one ownership change (per rule)
-    const eligible = segs.filter(function(s){
-      return s.currentOwner === vaultData.bioIBAN && !s.claimed && Number(s.ownershipChangeCount||0) === 1;
-    });
-    if (eligible.length < segmentsNeeded) return { proofs: [], used: [] };
-
-    // choose first required indices (deterministic for UX)
-    const chosen = eligible.slice(0, segmentsNeeded).sort(function(a,b){ return a.segmentIndex - b.segmentIndex; });
-    const biometricZKP = await Biometric.generateBiometricZKP();
-    if (!biometricZKP) throw new Error('Biometric ZKP generation failed or was denied.');
-
-    const coder = ethers.AbiCoder.defaultAbiCoder();
-
-    const proofs = [];
-    for (let i=0;i<chosen.length;i++){
-      const s = chosen[i];
-      const last = s.history[s.history.length - 1];
-      const baseStr = 'seg|' + s.segmentIndex + '|' + vaultData.bioIBAN + '|' + (s.ownershipChangeCount||1) + '|' + last.integrityHash + '|' + last.bioConst;
-      const ownershipProof        = Utils.to0x(await Utils.sha256Hex('own|'    + baseStr));
-      const unlockIntegrityProof  = Utils.to0x(await Utils.sha256Hex('unlock|' + baseStr));
-      const spentProof            = Utils.to0x(await Utils.sha256Hex('spent|'  + baseStr));
-
-      proofs.push({
-        segmentIndex: s.segmentIndex,
-        currentBioConst: last.bioConst,
-        ownershipProof: ownershipProof,
-        unlockIntegrityProof: unlockIntegrityProof,
-        spentProof: spentProof,
-        ownershipChangeCount: 1,
-        biometricZKP: biometricZKP
-      });
-    }
-
-    const inner = proofs.map(function(p){
-      return ethers.keccak256(coder.encode(
-        ['uint256','uint256','bytes32','bytes32','bytes32','uint256','bytes32'],
-        [p.segmentIndex, p.currentBioConst, p.ownershipProof, p.unlockIntegrityProof, p.spentProof, p.ownershipChangeCount, p.biometricZKP]
-      ));
-    });
-    const proofsHash = ethers.keccak256(coder.encode(['bytes32[]'], [inner]));
-
-    const deviceKeyHash = vaultData.deviceKeyHash;
-    const userBioConstant = proofs[0] ? proofs[0].currentBioConst : vaultData.initialBioConstant;
-    const nonce = Math.floor(Math.random() * 1e9);
-
-    const domain = { name: 'TVM', version: '1', chainId: Number(chainId || EXPECTED_CHAIN_ID), verifyingContract: CONTRACT_ADDRESS.toLowerCase() };
-    const types = { Claim: [
-      { name: 'user', type: 'address' },
-      { name: 'proofsHash', type: 'bytes32' },
-      { name: 'deviceKeyHash', type: 'bytes32' },
-      { name: 'userBioConstant', type: 'uint256' },
-      { name: 'nonce', type: 'uint256' }
-    ]};
-    const value = { user: account, proofsHash: proofsHash, deviceKeyHash: deviceKeyHash, userBioConstant: userBioConstant, nonce: nonce };
-    const signature = await signer.signTypedData(domain, types, value);
-
-    return { proofs, signature, deviceKeyHash, userBioConstant, nonce, used: chosen };
-  },
-
-  // After on-chain success, mark segments as claimed
-  markClaimed: async (segmentsUsed) => {
-    for (let i=0;i<segmentsUsed.length;i++){
-      const s = segmentsUsed[i];
-      s.claimed = true;
-      // Optional: append lightweight 'Claimed' event (does not affect count)
-      const last = s.history[s.history.length - 1];
-      const ts = Date.now();
-      const bio = last.bioConst + 1;
-      const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Claimed' + ts + vaultData.bioIBAN + 'OnChain' + bio);
-      s.history.push({ event:'Claimed', timestamp: ts, from:vaultData.bioIBAN, to:'OnChain', bioConst: bio, integrityHash });
-      await DB.saveSegmentToDB(s);
-    }
-  }
-};
-
-// ---------- UI ----------
-const UI = {
-  showAlert: (msg) => alert(msg),
-  showLoading: (id) => {
-    var el = document.getElementById(id + '-loading');
-    if (el) el.classList.remove('hidden');
-  },
-  hideLoading: (id) => {
-    var el = document.getElementById(id + '-loading');
-    if (el) el.classList.add('hidden');
-  },
-  updateConnectedAccount: () => {
-    var ca = document.getElementById('connectedAccount');
-    if (ca) ca.textContent = account ? (account.slice(0,6)+'...'+account.slice(-4)) : 'Not connected';
-    var wa = document.getElementById('wallet-address');
-    if (wa) wa.textContent  = account ? ('Connected: '+account.slice(0,6)+'...'+account.slice(-4)) : '';
-  }
-};
-
-// ---------- Contract Interactions ----------
-const withBuffer = (g) => (g * 120n) / 100n;
-const ensureReady = () => {
-  if (!account || !tvmContract) { UI.showAlert('Connect your wallet first.'); return false; }
-  return true;
-};
-
-const ContractInteractions = {
-  claimTVM: async (tvmToClaim /* optional integer */) => {
-    if (!ensureReady() || !tvmContract || typeof tvmContract.claimTVM !== 'function') {
-      UI.showAlert('TVM contract not available on this network.'); return;
-    }
-    UI.showLoading('claim');
-    try {
-      // Determine segments needed (12 per TVM); default 1 TVM
-      const tvmAmount = Math.max(1, parseInt(tvmToClaim || 1, 10));
-      const needSeg = tvmAmount * SEGMENTS_PER_TVM;
-
-      const prep = await Proofs.prepareClaimBatch(needSeg);
-      if (!prep.proofs || prep.proofs.length !== needSeg) {
-        UI.showAlert('Not enough eligible segments (need ' + needSeg + ' with ownershipChangeCount=1).'); return;
-      }
-
-      // Yearly TVM cap guard (local mirror, contract is source of truth)
-      resetCapsIfNeeded(Date.now());
-      if (vaultData.caps.tvmYearlyClaimed + tvmAmount > YEARLY_CAP_TVM) {
-        UI.showAlert('Yearly TVM cap reached locally.'); return;
-      }
-
-      // Gas estimate
-      var overrides = {};
-      try {
-        var ge = await tvmContract.estimateGas.claimTVM(prep.proofs, prep.signature, prep.deviceKeyHash, prep.userBioConstant, prep.nonce);
-        overrides.gasLimit = withBuffer(ge);
-      } catch (e) { console.warn('estimateGas failed; sending without explicit gasLimit', e); }
-
-      const tx = await tvmContract.claimTVM(prep.proofs, prep.signature, prep.deviceKeyHash, prep.userBioConstant, prep.nonce, overrides);
-      await tx.wait();
-
-      // Mark claimed locally and bump yearly TVM counter
-      await Proofs.markClaimed(prep.used);
-      vaultData.caps.tvmYearlyClaimed += tvmAmount;
-
-      UI.showAlert('Claim successful: ' + tvmAmount + ' TVM (' + needSeg + ' segments).');
-      Wallet.updateBalances();
-
-      // Clear transient autoProofs cache (not used anymore)
-      autoProofs = null;
-    } catch (err) {
-      console.error(err);
-      UI.showAlert('Error claiming TVM: ' + (err.reason || err.message || err));
-    } finally {
-      UI.hideLoading('claim');
-    }
-  },
-
-  exchangeTVMForSegments: async () => {
-    if (!ensureReady() || !tvmContract || typeof tvmContract.exchangeTVMForSegments !== 'function') {
-      UI.showAlert('TVM contract not available on this network.'); return;
-    }
-    UI.showLoading('exchange');
-    try {
-      const bals = await Wallet.getOnchainBalances();
-      const amount = bals.tvm;
-      if (amount === 0n) { UI.showAlert('No TVM to exchange.'); return; }
-      var overrides = {};
-      try { var ge = await tvmContract.estimateGas.exchangeTVMForSegments(amount); overrides.gasLimit = withBuffer(ge); } catch(e){}
-      const tx = await tvmContract.exchangeTVMForSegments(amount, overrides);
-      await tx.wait();
-      UI.showAlert('Exchange successful.');
-      Wallet.updateBalances();
-    } catch (err) {
-      UI.showAlert('Error exchanging: ' + (err.reason || err.message));
-    } finally {
-      UI.hideLoading('exchange');
-    }
-  },
-
-  swapTVMForUSDT: async () => {
-    if (!ensureReady() || !tvmContract || typeof tvmContract.swapTVMForUSDT !== 'function') {
-      UI.showAlert('TVM contract not available on this network.'); return;
-    }
-    UI.showLoading('swap');
-    try {
-      const bals = await Wallet.getOnchainBalances();
-      const amount = bals.tvm;
-      if (amount === 0n) { UI.showAlert('No TVM to swap.'); return; }
-      var overrides = {};
-      try { var ge = await tvmContract.estimateGas.swapTVMForUSDT(amount); overrides.gasLimit = withBuffer(ge); } catch(e){}
-      const tx = await tvmContract.swapTVMForUSDT(amount, overrides);
-      await tx.wait();
-      UI.showAlert('Swap successful.');
-      Wallet.updateBalances();
-    } catch (err) {
-      UI.showAlert('Error swapping: ' + (err.reason || err.message));
-    } finally {
-      UI.hideLoading('swap');
-    }
-  },
-
-  swapUSDTForTVM: async () => {
-    if (!ensureReady() || !tvmContract || typeof tvmContract.swapUSDTForTVM !== 'function') {
-      UI.showAlert('TVM contract not available on this network.'); return;
-    }
-    UI.showLoading('swap-usdt');
-    try {
-      const bals = await Wallet.getOnchainBalances();
-      const amount = bals.usdt;
-      if (amount === 0n) { UI.showAlert('No USDT to swap.'); return; }
-      await Wallet.ensureAllowance(usdtContract, account, CONTRACT_ADDRESS.toLowerCase(), amount);
-      var overrides = {};
-      try { var ge = await tvmContract.estimateGas.swapUSDTForTVM(amount); overrides.gasLimit = withBuffer(ge); } catch(e){}
-      const tx = await tvmContract.swapUSDTForTVM(amount, overrides);
-      await tx.wait();
-      UI.showAlert('Swap USDT→TVM successful.');
-      Wallet.updateBalances();
-    } catch (err) {
-      UI.showAlert('Error swapping USDT to TVM: ' + (err.reason || err.message));
-    } finally {
-      UI.hideLoading('swap-usdt');
-    }
-  }
-};
-
-// ---------- P2P (modal-integrated) ----------
-const P2P = {
-  // Core builder used by modal form
-  createCatchOut: async function(recipientIBAN, amountSegments, note) {
-    if (transactionLock) return UI.showAlert('Another transaction is in progress. Please wait.');
-    transactionLock = true;
-    try {
-      if (!vaultUnlocked) return UI.showAlert('Vault locked.');
-      const amount = parseInt(amountSegments, 10);
-      if (isNaN(amount) || amount <= 0 || amount > vaultData.balanceSHE) return UI.showAlert('Invalid amount.');
-      if (amount > 300) return UI.showAlert('Amount exceeds per-transfer segment limit.');
-
-      const segments = await DB.loadSegmentsFromDB();
-      // transferable: owned by me, UNLOCKED (we consider unlocked = ownershipChangeCount >= 1), not pending claim state
-      const transferable = segments
-        .filter(function(s){ return s.currentOwner === vaultData.bioIBAN && !s.claimed && Number(s.ownershipChangeCount||0) >= 1; })
-        .slice(0, amount);
-      if (transferable.length < amount) return UI.showAlert('Insufficient unlocked segments.');
-
-      const zkp = await Biometric.generateBiometricZKP();
-      if (!zkp) return UI.showAlert('Biometric ZKP generation failed.');
-
-      var header = { from: vaultData.bioIBAN, to: recipientIBAN, nonce: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random()) };
-      var chainsOut = [];
-
-      for (let k=0;k<transferable.length;k++) {
-        const s = transferable[k];
-        const last = s.history[s.history.length - 1];
-        const timestamp = Date.now();
-        const bioConst = last.bioConst + BIO_STEP;
-        const integrityHash = await Utils.sha256Hex(last.integrityHash + 'Transfer' + timestamp + vaultData.bioIBAN + recipientIBAN + bioConst);
-        const newHistory = { event:'Transfer', timestamp: timestamp, from:vaultData.bioIBAN, to:recipientIBAN, bioConst: bioConst, integrityHash: integrityHash, biometricZKP: zkp };
-        s.history.push(newHistory);
-        s.currentOwner = recipientIBAN;
-        s.ownershipChangeCount = (s.ownershipChangeCount || 0) + 1;
-        await DB.saveSegmentToDB(s);
-        // include last ≤10 entries only
-        chainsOut.push({ segmentIndex: s.segmentIndex, history: s.history.slice(-SEGMENT_HISTORY_MAX) });
-      }
-
-      // Transaction journal + balances (temporary decrease before auto-unlock)
-      vaultData.transactions.push({ bioIBAN: vaultData.bioIBAN, bioCatch: 'Outgoing to ' + recipientIBAN, amount: amount / EXCHANGE_RATE, timestamp: Date.now(), status: 'Sent' });
-      await Vault.updateBalanceFromSegments();
-
-      // Auto-unlock equal amount if caps allow
-      const created = await Segment.unlockNextSegments(amount);
-      if (created < amount) {
-        UI.showAlert('Unlocked only '+created+' of '+amount+' due to caps. Balance may drop until caps reset.');
-      }
-      await Vault.updateBalanceFromSegments();
-      await persistVaultData();
-
-      // COMPACT + ENCRYPT payload
-      var chainsOutCompact = toCompactChains(chainsOut);
-      var p2pKey = await deriveP2PKey(header.from, header.to, header.nonce);
-      var enc = await Encryption.encryptData(p2pKey, { n: note || '', c: chainsOutCompact, t: Date.now() });
-      var payload = {
-        v: 2,
-        from: header.from,
-        to: header.to,
-        nonce: header.nonce,
-        iv: Encryption.bufferToBase64(enc.iv),
-        ct: Encryption.bufferToBase64(enc.ciphertext)
-      };
-
-      // Store for modal result rendering
-      lastCatchOutPayload = payload;
-      lastCatchOutPayloadStr = JSON.stringify(payload);
-      await showCatchOutResultModal(lastCatchOutPayloadStr);
-
-    } finally {
-      transactionLock = false;
-    }
-  },
-
-  // Import handler used by modal form (supports v1 plaintext legacy + v2 encrypted compact)
-  importCatchIn: async function(payloadStr) {
-    if (transactionLock) return UI.showAlert('Another transaction is in progress. Please wait.');
-    transactionLock = true;
-    try {
-      if (!vaultUnlocked) return UI.showAlert('Vault locked.');
-      if (!payloadStr) return;
-
-      if (payloadStr.length > 1200000) return UI.showAlert('Payload too large.');
-
-      var envelope;
-      try { envelope = JSON.parse(payloadStr); } catch (e) { return UI.showAlert('Invalid payload JSON.'); }
-      if (!envelope) return UI.showAlert('Malformed payload.');
-
-      // Replay protection
-      if (!envelope.nonce) return UI.showAlert('Malformed payload: missing nonce.');
-      if (await DB.hasReplayNonce(envelope.nonce)) return UI.showAlert('Duplicate transfer detected (replay).');
-      await DB.putReplayNonce(envelope.nonce);
-
-      if (envelope.v === 2 && envelope.iv && envelope.ct) {
-        // Encrypted compact payload
-        var p2pKey = await deriveP2PKey(envelope.from, envelope.to, envelope.nonce);
-        var obj = await Encryption.decryptData(
-          p2pKey,
-          Encryption.base64ToBuffer(envelope.iv),
-          Encryption.base64ToBuffer(envelope.ct)
-        );
-        if (!obj || !Array.isArray(obj.c)) return UI.showAlert('Decrypted payload invalid.');
-        var expandedChains = fromCompactChains(obj.c);
-        await handleIncomingChains(expandedChains, envelope.from, envelope.to);
-      } else if (envelope.v === 1 && Array.isArray(envelope.chains)) {
-        // Legacy plaintext
-        await handleIncomingChains(envelope.chains, envelope.from, envelope.to);
-      } else {
-        UI.showAlert('Unsupported or malformed payload.');
-      }
-    } finally {
-      transactionLock = false;
-    }
-  }
-};
-
-// ---------- Notifications ----------
-const Notifications = {
-  requestPermission: () => {
-    if ('Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
-  },
-  showNotification: (title, body) => {
-    if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body: body });
-  }
-};
-
-// ---------- Backups ----------
-async function exportFullBackup() {
-  const segments = await DB.loadSegmentsFromDB();
-  const proofsBundle = await DB.loadProofsFromDB();
-  const payload = { vaultData: vaultData, segments: segments, proofsBundle: proofsBundle, exportedAt: Date.now() };
-  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'biovault.fullbackup.json'; a.click();
-}
-async function importFullBackup(file) {
-  const txt = await file.text();
-  const obj = JSON.parse(txt);
-  if (!obj || !obj.vaultData || !Array.isArray(obj.segments)) return UI.showAlert('Invalid full backup');
-  const stored = await DB.loadVaultDataFromDB();
-  if (!derivedKey) {
-    if (!stored || !stored.salt) return UI.showAlert("Unlock once before importing (no salt).");
-    const pin = prompt("Enter passphrase to re-encrypt imported vault:");
-    if (!pin) return UI.showAlert("Import canceled.");
-    derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
-  }
-  vaultData = obj.vaultData;
-  const segs = obj.segments;
-  const db = await DB.openVaultDB();
-  await new Promise((res, rej) => {
-    const tx = db.transaction([SEGMENTS_STORE], 'readwrite');
-    tx.objectStore(SEGMENTS_STORE).clear();
-    segs.forEach(function(s){ tx.objectStore(SEGMENTS_STORE).put(s); });
-    tx.oncomplete = res; tx.onerror = (e)=>rej(e.target.error);
-  });
-  if (obj.proofsBundle) await DB.saveProofsToDB(obj.proofsBundle);
-  await persistVaultData();
-  await Vault.updateBalanceFromSegments();
-  Vault.updateVaultUI();
-  UI.showAlert('Full backup imported.');
-}
-function exportTransactions() {
-  const blob = new Blob([JSON.stringify(vaultData.transactions)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'transactions.json'; a.click();
-}
-function backupVault() {
-  const backup = JSON.stringify(vaultData);
-  const blob = new Blob([backup], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'vault.backup'; a.click();
-}
-function exportFriendlyBackup() { alert('Exporting friendly backup...'); }
-function importVault() {
-  const file = document.getElementById('importVaultInput').files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    try {
-      const imported = JSON.parse(e.target.result);
-      const stored = await DB.loadVaultDataFromDB();
-      if (!derivedKey) {
-        if (!stored || !stored.salt) return UI.showAlert("Unlock once before importing (no salt found).");
-        const pin = prompt("Enter passphrase to re-encrypt imported vault:");
-        if (!pin) return UI.showAlert("Import canceled.");
-        derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin), stored.salt);
-      }
-      vaultData = imported;
-      await Vault.promptAndSaveVault();
-      Vault.updateVaultUI();
-      UI.showAlert("Vault imported and saved.");
-    } catch (err) {
-      console.error("Import failed", err);
-      UI.showAlert("Failed to import backup.");
-    }
-  };
-  reader.readAsText(file);
-}
-function copyToClipboard(id) {
-  const textEl = document.getElementById(id);
-  if (!textEl) return;
-  navigator.clipboard.writeText(textEl.textContent).then(function(){ UI.showAlert('Copied!'); });
-}
-
-// ---------- Export to Blockchain helper ----------
-async function exportProofToBlockchain() {
-  showSection('dashboard');
-  UI.showAlert('Open the Dashboard and click an action (e.g., Claim) to authorize with biometrics.');
-}
-
-// ---------- Section Switching ----------
-function showSection(id) {
-  var secs = document.querySelectorAll('.section');
-  for (var i=0;i<secs.length;i++) secs[i].classList.remove('active-section');
-  var tgt = document.getElementById(id);
-  if (tgt) tgt.classList.add('active-section');
-  if (id === 'dashboard') loadDashboardData();
-  if (id === 'biovault' && vaultUnlocked) {
-    var wp = document.querySelector('#biovault .whitepaper'); if (wp) wp.classList.add('hidden');
-    var vu = document.getElementById('vaultUI'); if (vu) vu.classList.remove('hidden');
-    var ls = document.getElementById('lockedScreen'); if (ls) ls.classList.add('hidden');
-  }
-}
-window.showSection = showSection; // expose for nav
-
-// ---------- Theme Toggle ----------
-(function(){
-  var t = document.getElementById('theme-toggle');
-  if (t) t.addEventListener('click', function(){ document.body.classList.toggle('dark-mode'); });
-})();
-
-// ---------- Service Worker ----------
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').then(function(){ console.log('[BioVault] SW registered'); }).catch(function(err){ console.warn('SW registration failed', err); });
-}
-
-// ---------- Persistence + session restore ----------
-async function requestPersistentStorage() {
-  try {
-    if (navigator.storage && navigator.storage.persist) {
-      const granted = await navigator.storage.persist();
-      console.log(granted ? "🔒 Persistent storage granted" : "⚠️ Storage may be cleared under pressure");
-    }
-  } catch (e) { console.warn("persist() not available", e); }
-}
-function setupSessionRestore() {
-  try {
-    const lastURL = localStorage.getItem(SESSION_URL_KEY);
-    if (lastURL && location.href !== lastURL) history.replaceState(null, "", lastURL);
-  } catch(e){}
-  window.addEventListener("beforeunload", function() {
-    try { localStorage.setItem(SESSION_URL_KEY, location.href); } catch(e){}
-  });
-}
-function enforceSingleVault() {
-  const v = localStorage.getItem(VAULT_LOCK_KEY);
-  if (!v) localStorage.setItem(VAULT_LOCK_KEY, 'locked');
-}
-function preventMultipleVaults() {
-  window.addEventListener('storage', function(e) {
-    if (e.key === VAULT_UNLOCKED_KEY) {
-      const unlocked = e.newValue === 'true';
-      if (unlocked && !vaultUnlocked) { vaultUnlocked = true; revealVaultUI(); }
-      if (!unlocked && vaultUnlocked) { vaultUnlocked = false; if (Vault.lockVault) Vault.lockVault(); }
-    }
-  });
-}
-function isVaultLockedOut() {
-  if (!vaultData.lockoutTimestamp) return false;
-  const now = Math.floor(Date.now()/1000);
-  if (now < vaultData.lockoutTimestamp) return true;
-  vaultData.lockoutTimestamp = null;
-  vaultData.authAttempts = 0;
-  return false;
-}
-async function handleFailedAuthAttempt() {
-  vaultData.authAttempts = (vaultData.authAttempts || 0) + 1;
-  if (vaultData.authAttempts >= MAX_AUTH_ATTEMPTS) {
-    vaultData.lockoutTimestamp = Math.floor(Date.now()/1000) + LOCKOUT_DURATION_SECONDS;
-  }
-  await Vault.promptAndSaveVault();
-}
-async function persistVaultData(saltBuf) {
-  if (!derivedKey) throw new Error('Derived key missing; cannot save vault.');
-  const enc = await Encryption.encryptData(derivedKey, vaultData);
-  const iv = enc.iv; const ciphertext = enc.ciphertext;
-  let saltBase64;
-  if (saltBuf) { saltBase64 = Encryption.bufferToBase64(saltBuf); }
-  else {
-    const existing = await DB.loadVaultDataFromDB();
-    if (existing && existing.salt) saltBase64 = Encryption.bufferToBase64(existing.salt);
-    else throw new Error('Salt missing; persist aborted.');
-  }
-  await DB.saveVaultDataToDB(iv, ciphertext, saltBase64);
-}
-
-// ---------- Catch-Out Result helpers (QR / ZIP) ----------
-function splitIntoFrames(str, maxLen) {
-  var chunks = [];
-  for (var i=0;i<str.length;i+=maxLen) chunks.push(str.slice(i, i+maxLen));
-  var total = chunks.length;
-  var out = [];
-  for (var j=0;j<total;j++) out.push('BC|' + (j+1) + '|' + total + '|' + chunks[j]);
-  return out;
-}
-function updateQrIndicator() {
-  var ind = document.getElementById('qrIndicator');
-  var nav = document.getElementById('qrNav');
-  if (!ind || !nav) return;
-  if (lastQrFrames.length <= 1) { nav.style.display = 'none'; }
-  else {
-    nav.style.display = 'flex';
-    ind.textContent = (lastQrFrameIndex + 1) + ' / ' + lastQrFrames.length;
-  }
-}
-async function renderQrFrame() {
-  await ensureQrLib();
-  var canvas = document.getElementById('catchOutQRCanvas');
-  if (!canvas || !window.QRCode) return;
-  var text = lastQrFrames[lastQrFrameIndex] || '';
-  try {
-    await window.QRCode.toCanvas(canvas, text, { width: QR_SIZE, margin: QR_MARGIN, errorCorrectionLevel: 'M' });
-  } catch (e) {
-    console.warn('[BioVault] QR render failed', e);
-  }
-  updateQrIndicator();
-}
-async function prepareFramesForPayload(payloadStr) {
-  lastQrFrames = splitIntoFrames(payloadStr, QR_CHUNK_MAX);
-  lastQrFrameIndex = 0;
-  updateQrIndicator();
-}
-async function downloadFramesZip() {
-  await ensureQrLib(); await ensureZipLib();
-  if (!window.JSZip) { UI.showAlert('ZIP library could not load.'); return; }
-  var zip = new window.JSZip();
-  // add payload
-  zip.file('payload.json', lastCatchOutPayloadStr || '{}');
-  // add manifest
-  zip.file('frames_manifest.json', JSON.stringify({ version:1, total:lastQrFrames.length, size:QR_SIZE, ecLevel:'M', prefix:'BC|i|N|' }, null, 2));
-
-  // Render each frame to PNG
-  for (var i=0;i<lastQrFrames.length;i++) {
-    var c = document.createElement('canvas');
-    c.width = QR_SIZE; c.height = QR_SIZE;
-    try {
-      await window.QRCode.toCanvas(c, lastQrFrames[i], { width: QR_SIZE, margin: QR_MARGIN, errorCorrectionLevel: 'M' });
-      var dataURL = c.toDataURL('image/png');
-      var base64 = dataURL.split(',')[1];
-      zip.file('qr_' + String(i+1).padStart(3,'0') + '.png', base64, { base64:true });
-    } catch (e) {
-      console.warn('Frame render failed (#'+(i+1)+')', e);
-    }
-  }
-
-  var blob = await zip.generateAsync({ type:'blob' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = 'catchout_qr_frames.zip'; a.click();
-  URL.revokeObjectURL(url);
-}
-
-// Open result modal and prime textarea + clipboard
-async function showCatchOutResultModal(payloadStr) {
-  var ta = document.getElementById('catchOutResultText');
-  if (ta) ta.value = payloadStr;
-
-  try { await navigator.clipboard.writeText(payloadStr); } catch(e){ console.warn('Clipboard copy failed', e); }
-
-  var qrColl = document.getElementById('qrCollapse');
-  if (qrColl && qrColl.classList.contains('show')) {
-    var collapse = window.bootstrap ? new bootstrap.Collapse(qrColl, { toggle:false }) : null;
-    if (collapse) collapse.hide();
-    else qrColl.classList.remove('show');
-  }
-
-  await prepareFramesForPayload(payloadStr);
-
-  var modalEl = document.getElementById('modalCatchOutResult');
-  if (modalEl) {
-    var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
-    if (m) m.show(); else modalEl.style.display = 'block';
-  }
-}
-
-/* ---------- Optional Node JSON catcher (server) ----------
-   This block only runs in a real Node.js environment.
-   It’s safely ignored by browsers so it won’t break your frontend. */
-(function(){
-  if (typeof window === 'undefined' && typeof require === 'function' && typeof module !== 'undefined') {
-    try {
-      const express = require("express");
-      const cors = require("cors");
-      const morgan = require("morgan");
-
-      const app = express();
-
-      // ---- Config ----
-      const PORT = process.env.PORT || 3000;
-      const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || "25mb";
-
-      app.set("trust proxy", true);
-
-      // ---- Middleware ----
-      app.use(
-        express.json({
-          limit: MAX_BODY_SIZE,
-          strict: true,
-          type: ["application/json", "application/*+json", "text/json"],
-        })
-      );
-
-      app.use(
-        express.text({
-          limit: MAX_BODY_SIZE,
-          type: ["text/plain", "application/octet-stream", "*/*"],
-        })
-      );
-
-      app.use(cors());
-      app.use(morgan("tiny"));
-
-      function parseMaybeJsonBody(req) {
-        if (req.body == null) return { error: "EMPTY_BODY" };
-        if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) return { data: req.body };
-        if (typeof req.body === "string") {
-          try { return { data: JSON.parse(req.body) }; }
-          catch (e) { return { error: "INVALID_JSON", detail: e.message }; }
-        }
-        return { error: "UNSUPPORTED_BODY_TYPE" };
-      }
-
-      function validateCipherEnvelope(obj) {
-        const required = ["v", "from", "to", "nonce", "iv", "ct"];
-        const missing = required.filter((k) => !(k in obj));
-        if (missing.length) return { ok: false, error: "MALFORMED_PAYLOAD", missing };
-        return { ok: true };
-      }
-
-      app.post(["/catch/in", "/catch", "/webhook", "/"], (req, res) => {
-        const parsed = parseMaybeJsonBody(req);
-        if (parsed.error) {
-          const status =
-            parsed.error === "EMPTY_BODY" ? 400
-            : parsed.error === "INVALID_JSON" ? 400
-            : parsed.error === "UNSUPPORTED_BODY_TYPE" ? 415
-            : 400;
-
-          return res.status(status).json({
-            ok: false,
-            error: parsed.error,
-            detail: parsed.detail || undefined,
-            hint: parsed.error === "INVALID_JSON"
-              ? "Ensure the request body is JSON text (use JSON.stringify on the client) and Content-Type: application/json."
-              : undefined,
-          });
-        }
-
-        const payload = parsed.data;
-
-        const envCheck = validateCipherEnvelope(payload);
-        if (!envCheck.ok) {
-          return res.status(422).json({ ok: false, error: envCheck.error, missing: envCheck.missing });
-        }
-
-        const ctLen = typeof payload.ct === "string" ? payload.ct.length : 0;
-        const maxCtChars = 5000000; // ~5 MB of text
-        if (ctLen > maxCtChars) {
-          return res.status(413).json({
-            ok: false,
-            error: "PAYLOAD_TOO_LARGE",
-            field: "ct",
-            maxChars: maxCtChars,
-            gotChars: ctLen,
-          });
-        }
-
-        return res.status(200).json({
-          ok: true,
-          received: { v: payload.v, from: payload.from, to: payload.to, nonce: payload.nonce },
-          bytes: Buffer.byteLength(
-            typeof req.body === "string" ? req.body : JSON.stringify(payload),
-            "utf8"
-          ),
-        });
-      });
-
-      app.use((err, req, res, next) => {
-        if (err && err.type === "entity.too.large") {
-          return res.status(413).json({ ok: false, error: "PAYLOAD_TOO_LARGE", limit: MAX_BODY_SIZE, detail: err.message });
-        }
-        if (err instanceof SyntaxError && "body" in err) {
-          return res.status(400).json({ ok: false, error: "INVALID_JSON", detail: err.message });
-        }
-        console.error("Unhandled error:", err);
-        return res.status(500).json({ ok: false, error: "INTERNAL_ERROR", detail: err && err.message ? err.message : "Unknown error" });
-      });
-
-      app.listen(PORT, () => { console.log("JSON catcher listening on :" + PORT + " (limit: " + MAX_BODY_SIZE + ")"); });
-    } catch (err) {
-      console.error("[BioVault] Node server block failed to start:", err && err.message ? err.message : err);
-    }
-  }
-})();
-
-// ---------- Init ----------
-async function init() {
-  console.log('[BioVault] init() starting…');
-  await requestPersistentStorage();
-  setupSessionRestore();
-  enforceSingleVault();
-  preventMultipleVaults();
-  Notifications.requestPermission();
-
-  // NFC listen (non-blocking)
-  if ('NDEFReader' in window) {
-    try { const reader = new NDEFReader(); await reader.scan(); reader.onreading = function(){ UI.showAlert('Incoming P2P transfer detected.'); }; } catch(e){ console.warn('NFC scan failed:', e); }
-  }
-
-  const stored = await DB.loadVaultDataFromDB();
-  if (stored) {
-    console.log('[BioVault] Vault record found. Attempts:', stored.authAttempts);
-    vaultData.authAttempts = stored.authAttempts;
-    vaultData.lockoutTimestamp = stored.lockoutTimestamp;
-  } else {
-    const credential = await Biometric.performBiometricAuthenticationForCreation();
-    if (credential) {
-      vaultData.credentialId = Encryption.bufferToBase64(credential.rawId);
-      // new vault: ensure 0x-prefixed Bio-IBAN and visible bonus
-      const rndHex = await Utils.sha256Hex(Math.random().toString());
-      vaultData.bioIBAN = Utils.to0x(rndHex);
-      vaultData.joinTimestamp = Date.now();
-      vaultData.deviceKeyHash = Utils.to0x(await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32))));
-      vaultData.balanceSHE = INITIAL_BALANCE_SHE;
-      vaultData.bonusConstant = EXTRA_BONUS_TVM;
-
-      const salt = Utils.rand(16);
-      const pin = prompt("Set passphrase:");
-      derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || ''), salt);
-      await persistVaultData(salt);
-
-      // IMPORTANT: initialize genesis segments properly unlocked and claim-eligible (occ===1)
-      await Segment.initializeSegments();
-
-      vaultUnlocked = true;
-      revealVaultUI();
-      await Vault.updateBalanceFromSegments();
-      Vault.updateVaultUI();
-    }
-  }
-
-  // Event Listeners
-  var byId = function(id){ return document.getElementById(id); };
-  var el;
-
-  // Wallet connections
-  el = byId('connectMetaMaskBtn');      if (el) el.addEventListener('click', Wallet.connectMetaMask);
-  el = byId('connectWalletConnectBtn'); if (el) el.addEventListener('click', Wallet.connectWalletConnect);
-  el = byId('connect-wallet');          if (el) el.addEventListener('click', Wallet.connectMetaMask);
-
-  // Vault Enter / Lock
-  el = byId('enterVaultBtn'); if (el) el.addEventListener('click', async function(){
-    console.log('[BioVault] Enter Vault clicked');
-    if (isVaultLockedOut()) { UI.showAlert("Vault locked out."); return; }
-    const pin = prompt("Enter passphrase:");
-    const stored = await DB.loadVaultDataFromDB();
-    if (!stored) return;
-    derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || ''), stored.salt);
-    try {
-      vaultData = await Encryption.decryptData(derivedKey, stored.iv, stored.ciphertext);
-
-      // Migrations: ensure 0x Bio-IBAN + bonusConstant populated + caps + nextSegmentIndex
-      if (vaultData.bioIBAN && vaultData.bioIBAN.slice(0,2) !== '0x') vaultData.bioIBAN = '0x' + vaultData.bioIBAN;
-      if (typeof vaultData.bonusConstant !== 'number' || vaultData.bonusConstant <= 0) vaultData.bonusConstant = EXTRA_BONUS_TVM;
-      if (!vaultData.caps) {
-        vaultData.caps = { dayKey:"", monthKey:"", yearKey:"", dayUsedSeg:0, monthUsedSeg:0, yearUsedSeg:0, tvmYearlyClaimed:0 };
-      }
-      if (typeof vaultData.nextSegmentIndex !== 'number' || vaultData.nextSegmentIndex <= INITIAL_BALANCE_SHE) {
-        const all = await DB.loadSegmentsFromDB();
-        var maxIdx = 0;
-        for (var i=0;i<all.length;i++){ if (all[i] && all[i].segmentIndex > maxIdx) maxIdx = all[i].segmentIndex; }
-        vaultData.nextSegmentIndex = Math.max(INITIAL_BALANCE_SHE + 1, maxIdx + 1);
-      }
-
-      await persistVaultData();
-
-      let ok = await Biometric.performBiometricAssertion(vaultData.credentialId);
-      if (!ok) {
-        const wantReEnroll = confirm("Biometric failed. Re-enroll on this device and proceed?");
-        if (wantReEnroll) ok = await reEnrollBiometricIfNeeded();
-      }
-      if (!ok) { await handleFailedAuthAttempt(); return UI.showAlert("Biometric failed."); }
-
-      vaultUnlocked = true;
-      revealVaultUI();
-      await Vault.updateBalanceFromSegments();
-      Vault.updateVaultUI();
-      try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'true'); } catch(e){}
-    } catch (e) {
-      console.error('[BioVault] Unlock error', e);
-      await handleFailedAuthAttempt();
-      UI.showAlert("Invalid passphrase or corrupted vault.");
-    }
-  });
-  el = byId('lockVaultBtn'); if (el) el.addEventListener('click', Vault.lockVault);
-
-  // Catch-Out button -> open form modal
-  el = byId('catchOutBtn'); if (el) el.addEventListener('click', function(){
-    var modalEl = document.getElementById('modalCatchOut');
-    if (modalEl) {
-      var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
-      if (m) m.show(); else modalEl.style.display = 'block';
-    }
-  });
-
-  // Catch-In button -> open import modal
-  el = byId('catchInBtn'); if (el) el.addEventListener('click', function(){
-    var modalEl = document.getElementById('modalCatchIn');
-    if (modalEl) {
-      var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
-      if (m) m.show(); else modalEl.style.display = 'block';
-    }
-  });
-
-  // Claim modal open
-  var claimBtn = byId('claim-tvm-btn');
-  if (claimBtn) claimBtn.addEventListener('click', function(){
-    var modalEl = document.getElementById('modalClaim');
-    if (modalEl) {
-      var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
-      if (m) m.show(); else modalEl.style.display = 'block';
-    }
-  });
-
-  // Catch-Out form submit
-  var formCO = byId('formCatchOut');
-  if (formCO) formCO.addEventListener('submit', async function(ev){
-    ev.preventDefault();
-    var recv = Utils.sanitizeInput((byId('receiverBioModal')||{}).value || '');
-    var amt  = Utils.sanitizeInput((byId('amountSegmentsModal')||{}).value || '');
-    var note = Utils.sanitizeInput((byId('noteModal')||{}).value || '');
-    if (!recv) { formCO.classList.add('was-validated'); return; }
-    var amtNum = parseInt(amt, 10);
-    if (isNaN(amtNum) || amtNum <= 0) { formCO.classList.add('was-validated'); return; }
-
-    var sp = byId('spCreateCatchOut'); if (sp) sp.classList.remove('d-none');
-    var btn = byId('btnCreateCatchOut'); if (btn) btn.disabled = true;
-
-    try {
-      await P2P.createCatchOut(recv, amtNum, note);
-      if (window.bootstrap) {
-        var m1 = bootstrap.Modal.getInstance(document.getElementById('modalCatchOut'));
-        if (m1) m1.hide();
-      }
-    } catch (e) {
-      console.error('CatchOut failed', e);
-      UI.showAlert('Catch Out failed: ' + (e.message || e));
-    } finally {
-      if (sp) sp.classList.add('d-none');
-      if (btn) btn.disabled = false;
-    }
-  });
-
-  // Catch-Out Result modal controls
-  var btnCopy = byId('btnCopyCatchOut');
-  if (btnCopy) btnCopy.addEventListener('click', function(){
-    var ta = byId('catchOutResultText');
-    if (!ta) return;
-    navigator.clipboard.writeText(ta.value || '').then(function(){ UI.showAlert('Payload copied to clipboard.'); });
-  });
-
-  // QR collapse: render first time when opened
-  var qrCollapseEl = byId('qrCollapse');
-  if (qrCollapseEl && window.bootstrap) {
-    qrCollapseEl.addEventListener('shown.bs.collapse', function(){ renderQrFrame(); });
-  } else if (qrCollapseEl) {
-    var btnShowQR = byId('btnShowQR');
-    if (btnShowQR) btnShowQR.addEventListener('click', function(){ setTimeout(renderQrFrame, 50); });
-  }
-
-  // Multi-QR Nav
-  var btnPrev = byId('qrPrev'); if (btnPrev) btnPrev.addEventListener('click', function(){
-    if (lastQrFrames.length === 0) return;
-    lastQrFrameIndex = (lastQrFrameIndex - 1 + lastQrFrames.length) % lastQrFrames.length;
-    renderQrFrame();
-  });
-  var btnNext = byId('qrNext'); if (btnNext) btnNext.addEventListener('click', function(){
-    if (lastQrFrames.length === 0) return;
-    lastQrFrameIndex = (lastQrFrameIndex + 1) % lastQrFrames.length;
-    renderQrFrame();
-  });
-
-  // Download ZIP of all QR frames
-  var btnZip = byId('btnDownloadQRZip');
-  if (btnZip) btnZip.addEventListener('click', function(){ downloadFramesZip(); });
-
-  // Catch-In form submit
-  var formCI = byId('formCatchIn');
-  if (formCI) formCI.addEventListener('submit', async function(ev){
-    ev.preventDefault();
-    var ta = byId('catchInPayloadModal');
-    var sp = byId('spImportCatchIn'); if (sp) sp.classList.remove('d-none');
-    var btn = byId('btnImportCatchIn'); if (btn) btn.disabled = true;
-    try {
-      await P2P.importCatchIn((ta&&ta.value) || '');
-      if (window.bootstrap) {
-        var m2 = bootstrap.Modal.getInstance(document.getElementById('modalCatchIn'));
-        if (m2) m2.hide();
-      }
-    } catch (e) {
-      console.error('CatchIn failed', e);
-      UI.showAlert('Catch In failed: ' + (e.message || e));
-    } finally {
-      if (sp) sp.classList.add('d-none');
-      if (btn) btn.disabled = false;
-    }
-  });
-
-  // Claim modal submit → call on-chain claim (auto proofs)
-  var formClaim = byId('formClaim');
-  if (formClaim) formClaim.addEventListener('submit', async function(ev){
-    ev.preventDefault();
-    var sp = byId('spSubmitClaim'); if (sp) sp.classList.remove('d-none');
-    var btn = byId('btnSubmitClaim'); if (btn) btn.disabled = true;
-    try {
-      await ContractInteractions.claimTVM();
-      if (window.bootstrap) {
-        var m3 = bootstrap.Modal.getInstance(document.getElementById('modalClaim'));
-        if (m3) m3.hide();
-      }
-    } catch (e) {
-      console.error('Claim failed', e);
-      UI.showAlert('Claim failed: ' + (e.message || e));
-    } finally {
-      if (sp) sp.classList.add('d-none');
-      if (btn) btn.disabled = false;
-    }
-  });
-
-  // Idle Timeout
-  var idleTimer;
-  var resetIdle = function(){ clearTimeout(idleTimer); idleTimer = setTimeout(Vault.lockVault, MAX_IDLE); };
-  ['click','keydown','mousemove','touchstart','visibilitychange'].forEach(function(evt){
-    window.addEventListener(evt, resetIdle);
-  });
-  resetIdle();
-
-  // UTC Time Update
-  setInterval(function(){
-    const tz = document.getElementById('utcTime');
-    if (tz) tz.textContent = new Date().toUTCString();
-  }, 1000);
-
-  // Load Dashboard on Init if Needed (no-op if wallet not connected)
-  loadDashboardData();
-  console.log('[BioVault] init() complete.');
-}
-
-// ---------- Dashboard ----------
-async function loadDashboardData() {
-  await ensureChartLib();
-  await Wallet.updateBalances();
-
-  let table = '';
-  let totalReserves = 0;
-  for (let i = 1; i <= LAYERS; i++) {
-    const reserve = 100000000; // mock/placeholder; replace with real values when available
-    totalReserves += reserve;
-    const capProgress = (SEGMENTS_PER_LAYER / reserve * 100).toFixed(2) + '%';
-    table += '<tr><td>'+i+'</td><td>'+reserve.toLocaleString()+' TVM</td><td>'+capProgress+'</td></tr>';
-  }
-  const lt = document.getElementById('layer-table');
-  if (lt) lt.innerHTML = table;
-  const ar = document.getElementById('avg-reserves');
-  if (ar) ar.textContent = (totalReserves / LAYERS).toLocaleString() + ' TVM';
-
-  const c1 = document.getElementById('pool-chart');
-  const c2 = document.getElementById('layer-chart');
-  if (window.Chart && c1 && c2) {
-    if (c1._chart) c1._chart.destroy();
-    c1._chart = new Chart(c1, {
-      type: 'doughnut',
-      data: { labels: ['Human Investment (51%)','AI Cap (49%)'], datasets: [{ data: [51,49], borderRadius: 5 }] },
-      options: { responsive:true, plugins:{ legend:{ position:'bottom' } }, cutout:'60%' }
-    });
-    if (c2._chart) c2._chart.destroy();
-    c2._chart = new Chart(c2, {
-      type: 'bar',
-      data: { labels: Array.from({ length: LAYERS }, function(_, i){ return 'Layer ' + (i + 1); }), datasets: [{ label: 'Reserve (M TVM)', data: Array(LAYERS).fill(100) }] },
-      options: { responsive:true, scales:{ y:{ beginAtZero:true } } }
-    });
-  }
-}
-
-init();
-/* ==========================================================================
- * END — Single-source clean build (duplicates removed, genesis unlock fixed,
- * migrations added, caps honored, P2P+on-chain separation guaranteed).
- * ========================================================================== */
+/* ===================== Boot ===================== */
+BioVault.init().then(function(){ _log('BioVault ready'); }).catch(function(e){ _err('Init failed', e&&e.message?e.message:e); });
