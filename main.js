@@ -1,15 +1,20 @@
-/******************************
+/* ==========================================================================
  * main.js — BalanceChain PWA core (ES2018)
- * Master-class: offline-first vault, compact+encrypted P2P, biometric+ZKP wiring, TVM on-chain adapter.
+ * Master‑class: offline‑first vault, compact+encrypted P2P, biometric+ZKP,
+ *               TVM on‑chain adapter, auto‑ID resolver, and readiness gating.
  * Guarantees:
- *  - P2P is separate from on-chain (zero-fee, offline-capable).
- *  - On-chain TVM claim uses ONLY segments with ownershipChangeCount === 1.
+ *  - P2P is separate from on‑chain (zero‑fee, offline‑capable).
+ *  - On‑chain TVM claim uses ONLY segments with ownershipChangeCount === 1.
  *  - Sender MUST be current owner; receiver becomes current; sender becomes previous; local history capped to 10.
  *  - Deterministic unlocks with hard caps (360/day, 3600/month, 10800/year; TVM 900/yr + 100 bonus parity).
- *  - ES2018-compatible: no optional chaining, no BigInt literals, no numeric separators.
- ******************************/
+ *  - ES2018‑compatible: no optional chaining, no BigInt literals, no numeric separators.
+ * ========================================================================== */
 
-// ---------- Global Constants ----------
+/* ===================== lightweight console helpers ===================== */
+function _log(){ try{ console.log.apply(console, ['[BioVault]'].concat([].slice.call(arguments))); }catch(e){} }
+function _err(){ try{ console.error.apply(console, ['[BioVault]'].concat([].slice.call(arguments))); }catch(e){} }
+
+/* ===================== Global Constants ===================== */
 var DB_NAME = 'BioVaultDB';
 var DB_VERSION = 4;
 var VAULT_STORE = 'vault';
@@ -17,7 +22,7 @@ var SEGMENTS_STORE = 'segments';
 var PROOFS_STORE = 'proofs';
 
 var INITIAL_BALANCE_SHE = 1200;
-var EXCHANGE_RATE = 12; // 1 TVM = 12 SHE
+var EXCHANGE_RATE = 12;              // 1 TVM = 12 SHE
 var GENESIS_BIO_CONSTANT = 1736565605;
 var BIO_TOLERANCE_SECONDS = 720;
 
@@ -30,20 +35,17 @@ var YEARLY_CAP = 10800;
 var YEARLY_TVM_CAP = 900;
 var EXTRA_BONUS_TVM = 100;
 
-// Contract addresses (lowercase)
+// Finalized contract addresses (lowercase)
 var TVM_CONTRACT_ADDRESS = '0xcc79b1bc9eabc3d30a3800f4d41a4a0599e1f3c6';
 var USDT_ADDRESS         = '0xdac17f958d2ee523a2206206994597c13d831ec7';
 
-// Network guard (set to your chain id)
+// Expected network
 var EXPECTED_CHAIN_ID = 1;
 
-// P2P Payload Version
+// P2P payload version
 var P2P_VERSION = 3;
 
-// ---------- Small utils ----------
-function log(){ try{ console.log.apply(console, ['[BioVault]'].concat([].slice.call(arguments))); }catch(e){} }
-function err(){ try{ console.error.apply(console, ['[BioVault]'].concat([].slice.call(arguments))); }catch(e){} }
-
+/* ===================== Small utils ===================== */
 function nowTs(){ return Math.floor(Date.now()/1000); }
 function bytesConcat(a,b){ var o=new Uint8Array(a.length+b.length); o.set(a,0); o.set(b,a.length); return o; }
 function strToUtf8(s){ return new TextEncoder().encode(s); }
@@ -54,7 +56,7 @@ function randomBytes(n){ var a=new Uint8Array(n); crypto.getRandomValues(a); ret
 function hexToBytes(hex){ hex=hex.replace(/^0x/,''); var n=hex.length/2, o=new Uint8Array(n); for(var i=0;i<n;i++) o[i]=parseInt(hex.substr(i*2,2),16); return o; }
 function bytesToHex(buf){ var s='0x'; for(var i=0;i<buf.length;i++){ var h=buf[i].toString(16); if(h.length<2)h='0'+h; s+=h; } return s; }
 
-// ---------- Tiny CBOR (subset) ----------
+/* ===================== Tiny CBOR (subset) ===================== */
 var CBOR=(function(){
   var MT_UINT=0,MT_NEG=1,MT_BYTES=2,MT_STRING=3,MT_ARRAY=4,MT_MAP=5,MT_SIMPLE=7;
   function encUInt(u){ if(u<24)return new Uint8Array([(MT_UINT<<5)|u]); if(u<256)return new Uint8Array([(MT_UINT<<5)|24,u]); if(u<65536)return new Uint8Array([(MT_UINT<<5)|25,u>>8,u&255]); var a=new Uint8Array(5); a[0]=(MT_UINT<<5)|26; a[1]=(u>>>24)&255;a[2]=(u>>>16)&255;a[3]=(u>>>8)&255;a[4]=u&255; return a; }
@@ -77,24 +79,24 @@ var CBOR=(function(){
   return { encode:encode, decode:function(u8){ var d=decode(u8,0); return d.v; } };
 })();
 
-// ---------- IndexedDB ----------
-var dbInstance=null;
+/* ===================== IndexedDB ===================== */
+var _db=null;
 function openDB(){ return new Promise(function(res,rej){ var req=indexedDB.open(DB_NAME,DB_VERSION);
   req.onupgradeneeded=function(ev){ var db=ev.target.result;
     if(!db.objectStoreNames.contains(VAULT_STORE)) db.createObjectStore(VAULT_STORE,{keyPath:'key'});
     if(!db.objectStoreNames.contains(SEGMENTS_STORE)){ var s=db.createObjectStore(SEGMENTS_STORE,{keyPath:'id'}); s.createIndex('by_owner','current_owner',{unique:false}); s.createIndex('by_unlocked','unlocked',{unique:false}); }
     if(!db.objectStoreNames.contains(PROOFS_STORE)) db.createObjectStore(PROOFS_STORE,{keyPath:'id'});
   };
-  req.onsuccess=function(e){ dbInstance=e.target.result; res(dbInstance); };
+  req.onsuccess=function(e){ _db=e.target.result; res(_db); };
   req.onerror=function(e){ rej(e.target.error); };
 });}
-function tx(store,mode){ return dbInstance.transaction([store],mode).objectStore(store); }
-function put(store,obj){ return new Promise(function(res,rej){ var r=tx(store,'readwrite').put(obj); r.onsuccess=function(){res(true)}; r.onerror=function(e){rej(e.target.error)}; }); }
-function get(store,key){ return new Promise(function(res,rej){ var r=tx(store,'readonly').get(key); r.onsuccess=function(){res(r.result||null)}; r.onerror=function(e){rej(e.target.error)}; }); }
-function getAll(store){ return new Promise(function(res,rej){ var r=tx(store,'readonly').getAll(); r.onsuccess=function(){res(r.result||[])}; r.onerror=function(e){rej(e.target.error)}; }); }
-function getAllIndex(store,indexName,val){ return new Promise(function(res,rej){ var i=tx(store,'readonly').index(indexName); var q=i.getAll(val); q.onsuccess=function(){res(q.result||[])}; q.onerror=function(e){rej(e.target.error)}; }); }
+function _tx(store,mode){ return _db.transaction([store],mode).objectStore(store); }
+function put(store,obj){ return new Promise(function(res,rej){ var r=_tx(store,'readwrite').put(obj); r.onsuccess=function(){res(true)}; r.onerror=function(e){rej(e.target.error)}; }); }
+function get(store,key){ return new Promise(function(res,rej){ var r=_tx(store,'readonly').get(key); r.onsuccess=function(){res(r.result||null)}; r.onerror=function(e){rej(e.target.error)}; }); }
+function getAll(store){ return new Promise(function(res,rej){ var r=_tx(store,'readonly').getAll(); r.onsuccess=function(){res(r.result||[])}; r.onerror=function(e){rej(e.target.error)}; }); }
+function getAllIndex(store,indexName,val){ return new Promise(function(res,rej){ var i=_tx(store,'readonly').index(indexName); var q=i.getAll(val); q.onsuccess=function(){res(q.result||[])}; q.onerror=function(e){rej(e.target.error)}; }); }
 
-// ---------- Vault ----------
+/* ===================== Vault ===================== */
 var Vault={
   async init(){
     await openDB();
@@ -111,7 +113,7 @@ var Vault={
       };
       await put(VAULT_STORE,rec);
       await put(VAULT_STORE,{key:'p256Private',value:await crypto.subtle.exportKey('jwk',deviceKey.privateKey)});
-      log('Vault initialized.');
+      _log('Vault initialized.');
     }
     return true;
   },
@@ -142,7 +144,7 @@ var Vault={
   }
 };
 
-// ---------- Segments ----------
+/* ===================== Segments ===================== */
 var Segments={
   // schema: { id, layer, unlocked, current_owner, previous_owner, original_owner, ownershipChangeCount, history[], onchain_eligible, proof{genesis} }
 
@@ -201,8 +203,8 @@ var Segments={
       if(s.history&&s.history.length>=10) s.history.shift();
       if(!s.history) s.history=[];
       s.history.push({owner:receiver,ts:ts,txid:txid||('p2p:'+s.id+':'+ts)});
-      s.onchain_eligible=false;
-      s.unlocked=true;
+      s.onchain_eligible=false;   // once moved P2P, it's no longer occ==1 genesis-eligible
+      s.unlocked=true;            // usable for further local transfers
       await put(SEGMENTS_STORE,s);
       await put(PROOFS_STORE,{id:'proof:'+s.id+':'+s.ownershipChangeCount,segmentId:s.id,owner:receiver,ts:ts,history:s.history.slice()});
     }
@@ -210,15 +212,7 @@ var Segments={
   }
 };
 
-// ---------- Crypto helpers ----------
-var CryptoBox={
-  async hkdf(ikm,salt,info){
-    if(!salt) salt=new Uint8Array(32);
-    if(!info) info=new Uint8Array(0);
-    var key=await crypto.subtle.importKey('raw',ikm,{name:'HKDF'},false,['deriveKey']);
-    return crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:salt,info:info},{name:'HKDF'}, {name:'AES-GCM',length:256}, false, []);
-  } // shim (we'll derive directly below)
-};
+/* ===================== Crypto helpers ===================== */
 async function deriveAesKey(shared, label){
   var base=await crypto.subtle.importKey('raw', shared, {name:'HKDF'}, false, ['deriveKey']);
   return crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:new Uint8Array(32),info:strToUtf8(label||'p2p/body')}, base, {name:'AES-GCM',length:256}, true, ['encrypt','decrypt']);
@@ -233,7 +227,7 @@ async function aesGcmDecrypt(key, iv, ct){
   return new Uint8Array(pt);
 }
 
-// ---------- Signatures ----------
+/* ===================== Signatures ===================== */
 async function signWithEthereum(addrLower, bytes){
   if(!window.ethereum) throw new Error('No ethereum provider');
   var hex=bytesToHex(bytes);
@@ -245,10 +239,9 @@ async function signWithP256(bytes){
   return b64uEncode(new Uint8Array(sig));
 }
 
-// ---------- Biometric & ZKP ----------
+/* ===================== Biometric & ZKP ===================== */
 var Biometric={
   busy:false,
-  // enroll new WebAuthn credential
   async enroll(){
     if(this.busy) return null; this.busy=true;
     try{
@@ -264,9 +257,8 @@ var Biometric={
       var rawIdB64 = b64uEncode(new Uint8Array(cred.rawId));
       await Vault.setConfig({ bioCredentialId: rawIdB64 });
       return rawIdB64;
-    }catch(e){ err('Enroll failed:', e); return null; } finally{ this.busy=false; }
+    }catch(e){ _err('Enroll failed:', e); return null; } finally{ this.busy=false; }
   },
-  // assert presence (unlock)
   async assert(){
     if(this.busy) return false; this.busy=true;
     try{
@@ -280,9 +272,8 @@ var Biometric={
         timeout:60000
       }});
       return !!assertion;
-    }catch(e){ err('Assertion failed:', e); return false; } finally{ this.busy=false; }
+    }catch(e){ _err('Assertion failed:', e); return false; } finally{ this.busy=false; }
   },
-  // produce a compact ZKP token from a fresh assertion signature (not a real zk proof; contract expects bytes32 token)
   async zkp(){
     if(this.busy) return null; this.busy=true;
     try{
@@ -301,11 +292,11 @@ var Biometric={
       var hex='0x'; var dv=new Uint8Array(digest);
       for (var i=0;i<dv.length;i++){ var h=dv[i].toString(16); if(h.length<2)h='0'+h; hex+=h; }
       return hex;
-    }catch(e){ err('ZKP generation failed:', e); return null; } finally{ this.busy=false; }
+    }catch(e){ _err('ZKP generation failed:', e); return null; } finally{ this.busy=false; }
   }
 };
 
-// "Biometric asshole guard" (fail-closed + lockout + re-enroll)
+/* ===================== BioGuard (fail-closed) ===================== */
 var BioGuard={
   MAX_FAILS:3,
   LOCKOUT_SECONDS:3600,
@@ -339,7 +330,7 @@ var BioGuard={
   }
 };
 
-// ---------- P2P ----------
+/* ===================== P2P ===================== */
 var P2P={
   seq:0,
   async identityString(){
@@ -349,7 +340,7 @@ var P2P={
   },
   async buildHeader(from,to,count){ return {0:P2P_VERSION,1:nowTs(),2:++this.seq,3:count|0,4:from,5:to}; },
   async prepareSend(sender, receiverIdentity, n, sharedKeyBytes, memo){
-    await BioGuard.requireBiometric(); // require biometric before spending
+    await BioGuard.requireBiometric(); // biometric gate before spend
     sender=(sender||'').toLowerCase();
     await Vault.touchCaps(n,0);
     var segs=await Segments.consumeForP2P(sender,n);
@@ -368,7 +359,7 @@ var P2P={
     return { header: finalHeader, iv: b64uEncode(enc.iv), body: b64uEncode(enc.ct) };
   },
   async receiveApply(receiver, packed, sharedKeyBytes, txid){
-    await BioGuard.requireBiometric(); // require biometric to accept
+    await BioGuard.requireBiometric(); // biometric gate to accept
     receiver=(receiver||'').toLowerCase();
     var headerBytes=b64uDecode(packed.header); var header=CBOR.decode(headerBytes);
     if(header['0']!==P2P_VERSION) throw new Error('Bad version');
@@ -383,7 +374,7 @@ var P2P={
   }
 };
 
-// ---------- TVM on-chain adapter ----------
+/* ===================== TVM on‑chain adapter ===================== */
 (function(){
   var ERC20_ABI=[
     "function approve(address spender,uint256 amount) external returns(bool)",
@@ -391,6 +382,7 @@ var P2P={
     "function balanceOf(address owner) external view returns(uint256)",
     "function decimals() external view returns(uint8)"
   ];
+  // Claim by simple items (occ===1). Contract baseline assumed FINAL.
   // struct ClaimItem { bytes32 id; address owner; address previousOwner; address originalOwner; uint256 ownershipChangeCount; uint256 genesis; }
   var TVM_ABI=[
     "function claim(tuple(bytes32 id,address owner,address previousOwner,address originalOwner,uint256 ownershipChangeCount,uint256 genesis)[] items) external",
@@ -401,13 +393,17 @@ var P2P={
 
   function ensureEthers(){
     return new Promise(function(resolve,reject){
-      if(window.ethers) return resolve();
+      if(window.ethers && window.ethers.providers) return resolve();
       var s=document.createElement('script');
       s.src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js";
-      s.onload=function(){ resolve(); };
+      s.onload=function(){ _log('ethers ready (jsDelivr)'); resolve(); };
       s.onerror=function(){ reject(new Error('ethers.js load failed')); };
       document.head.appendChild(s);
     });
+  }
+
+  async function contractHasCode(provider, addr){
+    try{ var code=await provider.getCode(addr); return !!code && code!=='0x'; }catch(_e){ return false; }
   }
 
   var EVM={
@@ -420,6 +416,8 @@ var P2P={
       this.signer=this.provider.getSigner(); this.account=(accts&&accts[0])?accts[0].toLowerCase():null;
       var net=await this.provider.getNetwork(); this.chainId=net.chainId;
       if(Number(this.chainId)!==Number(EXPECTED_CHAIN_ID)) throw new Error('Wrong network');
+      if(!(await contractHasCode(this.provider, TVM_CONTRACT_ADDRESS))) throw new Error('TVM contract missing on this network');
+      if(!(await contractHasCode(this.provider, USDT_ADDRESS))) throw new Error('USDT contract missing on this network');
       this.usdt=new window.ethers.Contract(USDT_ADDRESS, ERC20_ABI, this.signer);
       this.tvm =new window.ethers.Contract(TVM_CONTRACT_ADDRESS, TVM_ABI, this.signer);
       try{ if(typeof this.tvm.decimals==='function'){ var d=await this.tvm.decimals(); this.tvmDecimals=(d.toNumber?d.toNumber():d); } }catch(_e){}
@@ -430,7 +428,7 @@ var P2P={
       var u=window.ethers.utils, items=[];
       for (var i=0;i<bundle.length;i++){
         var it=bundle[i];
-        var id32=u.keccak256(u.toUtf8Bytes(it.id));
+        var id32=u.keccak256(u.toUtf8Bytes(it.id)); // deterministic 32‑byte id from local id
         var occ  = window.ethers.BigNumber.from(it.occ||1);
         var gen  = window.ethers.BigNumber.from((it.proof&&it.proof.genesis)||GENESIS_BIO_CONSTANT);
         items.push({id:id32, owner:(it.owner||'').toLowerCase(), previousOwner:(it.previous||'').toLowerCase(), originalOwner:(it.original||'').toLowerCase(), ownershipChangeCount:occ, genesis:gen});
@@ -438,7 +436,7 @@ var P2P={
       return items;
     },
     async claimFromVault(maxCount){
-      await BioGuard.requireBiometric(); // biometric gate for on-chain claim
+      await BioGuard.requireBiometric(); // biometric gate for on‑chain claim
       if(!this.tvm) await this.connect();
       var bundle=await window.BioVault.exportOnchainClaim(maxCount|0);
       if(!bundle.length) throw new Error('No occ==1 segments');
@@ -479,7 +477,7 @@ var P2P={
   window.BioVaultEVM = EVM;
 })();
 
-// ---------- On-chain claim export (vault API) ----------
+/* ===================== On‑chain claim export (vault API) ===================== */
 var TVM={
   async collectOnchainEligible(n){
     var all=await getAll(SEGMENTS_STORE), out=[];
@@ -497,10 +495,10 @@ var TVM={
   }
 };
 
-// ---------- Public API ----------
+/* ===================== Public API ===================== */
 var BioVault={
   ready:false,
-  async init(){ await Vault.init(); this.ready=true; log('App ready'); return true; },
+  async init(){ await Vault.init(); this.ready=true; _log('App ready'); return true; },
   async bindEthereumAddress(a){ return Vault.setEthereumAddress(a); },
   async myIdentity(){ var conf=await Vault.getConfig(); return conf.ethereumAddress?conf.ethereumAddress:('p256:'+conf.p256PublicJwk.x+'.'+conf.p256PublicJwk.y); },
   async segmentsUnlocked(){ return Segments.listUnlocked(); },
@@ -531,132 +529,15 @@ var BioVault={
   async biometricAssert(){ return Biometric.assert(); },
   async biometricZKP(){ return Biometric.zkp(); }
 };
-
 window.BioVault=BioVault;
 
-// ---------- UI wiring (biometric + ZKP + wallet + P2P modals) ----------
-(function(){
-  function byId(id){ return document.getElementById(id); }
-
-  function setText(id, txt){ var el=byId(id); if(el) el.textContent = String(txt); }
-
-  async function connectWalletAndShow(){
-    try{
-      var info = await window.BioVaultEVM.connect();
-      setText('connectedAccount', info.account ? (info.account.slice(0,6)+'...'+info.account.slice(-4)) : 'Not connected');
-      var btn = byId('connect-wallet'); if(btn){ btn.textContent='Wallet Connected'; btn.disabled=true; }
-    }catch(e){ alert(e && e.message ? e.message : e); }
-  }
-
-  // Biometric: enroll
-  var btnEnroll = byId('bio-enroll-btn');
-  if(btnEnroll) btnEnroll.addEventListener('click', async function(){
-    try{
-      var cid = await BioVault.enrollBiometric();
-      if(!cid) return alert('Enrollment failed.');
-      setText('bio-status','Enrolled'); setText('bio-cred', cid);
-      alert('Biometric enrolled on this device.');
-    }catch(e){ alert(e.message||e); }
-  });
-
-  // Biometric: test assertion
-  var btnBioTest = byId('bio-test-btn');
-  if(btnBioTest) btnBioTest.addEventListener('click', async function(){
-    try{
-      var ok = await BioVault.biometricAssert();
-      alert(ok?'Biometric OK':'Biometric failed');
-    }catch(e){ alert(e.message||e); }
-  });
-
-  // Biometric: ZKP preview (UI)
-  var btnZkp = byId('bio-zkp-btn');
-  if(btnZkp) btnZkp.addEventListener('click', async function(){
-    try{
-      var z=await BioVault.biometricZKP();
-      if(!z) return alert('ZKP generation failed.');
-      setText('bio-zkp-out', z);
-    }catch(e){ alert(e.message||e); }
-  });
-
-  // Wallet connect
-  var btnConn = byId('connect-wallet');
-  if(btnConn) btnConn.addEventListener('click', connectWalletAndShow);
-
-  // Claim TVM (uses vault export + EVM adapter; biometric guard inside)
-  var claimBtn = byId('claim-tvm-btn');
-  if(claimBtn) claimBtn.addEventListener('click', async function(){
-    try{
-      var tx = await window.BioVaultEVM.claimFromVault(240); // example: up to 240 segments (20 TVM) if available
-      alert('Claim submitted: '+tx.hash);
-    }catch(e){ alert(e.message||e); }
-  });
-
-  // Swap & Mint examples
-  var swap1 = byId('swap-tvm-usdt-btn');
-  if(swap1) swap1.addEventListener('click', async function(){ try{ var tx=await window.BioVaultEVM.swapTVMForUSDT('1','0.9'); alert('Swap tx: '+tx.hash);}catch(e){alert(e.message||e);} });
-  var swap2 = byId('swap-usdt-tvm-btn');
-  if(swap2) swap2.addEventListener('click', async function(){ try{ var tx=await window.BioVaultEVM.swapUSDTForTVM('10','9'); alert('Swap tx: '+tx.hash);}catch(e){alert(e.message||e);} });
-  var mintU = byId('mint-usdt-btn');
-  if(mintU) mintU.addEventListener('click', async function(){ try{ var tx=await window.BioVaultEVM.mintFromUSDT('50'); alert('Mint tx: '+tx.hash);}catch(e){alert(e.message||e);} });
-
-  // P2P: Catch-Out form
-  var coForm = byId('formCatchOut');
-  if(coForm) coForm.addEventListener('submit', async function(ev){
-    ev.preventDefault();
-    try{
-      var recv = (byId('receiverBioModal')||{}).value||'';
-      var amt  = parseInt(((byId('amountSegmentsModal')||{}).value||'0'),10);
-      var note = (byId('noteModal')||{}).value||'';
-      if(!recv || !amt || amt<=0) return alert('Invalid input.');
-      // sharedKeyBytes must be known to both peers (QR exchange beforehand)
-      var sharedKeyBytes = randomBytes(32); // placeholder; replace with negotiated key
-      var sender = (await Vault.getConfig()).ethereumAddress || await BioVault.myIdentity();
-      var pkt = await BioVault.p2pPrepareSend(String(sender), String(recv), amt, sharedKeyBytes, note);
-      var ta = byId('catchOutResultText'); if(ta) ta.value = JSON.stringify(pkt);
-      alert('Catch-Out created. Share the payload securely.');
-    }catch(e){ alert(e.message||e); }
-  });
-
-  // P2P: Catch-In form
-  var ciForm = byId('formCatchIn');
-  if(ciForm) ciForm.addEventListener('submit', async function(ev){
-    ev.preventDefault();
-    try{
-      var payloadStr = (byId('catchInPayloadModal')||{}).value||'';
-      if(!payloadStr) return;
-      var obj = JSON.parse(payloadStr);
-      var sharedKeyBytes = randomBytes(32); // placeholder; must match sender’s
-      var receiver = (await Vault.getConfig()).ethereumAddress || await BioVault.myIdentity();
-      await BioVault.p2pReceiveApply(String(receiver), obj, sharedKeyBytes);
-      alert('Catch-In applied.');
-    }catch(e){ alert(e.message||e); }
-  });
-})();
-
-// ---------- Boot ----------
-BioVault.init().catch(function(e){ err('Init failed:', e&&e.message?e.message:e); });
-
-/* CHANGE LOG
-- Added biometric enrollment, assertion, ZKP generator, and fail-closed guard (lockout + re-enroll).
-- Biometric required for any spend-like operation (P2P send, receive apply, on-chain claim/mint/swap).
-- On-chain adapter appended (claim/mint/swap) with strict occ===1 export bundle from the vault.
-- P2P v3: compact CBOR header + AES-GCM encrypted body, signature over (header||ciphertext).
-- Ownership rules enforced; deterministic unlocks + caps.
-*/
-/******************************
- * main.js — BalanceChain PWA core (ES2018)
- * Auto-ID resolver edition: main.js adapts to whatever IDs exist in index.html.
- * Strictly preserves finalized TVM + P2P logic and biometric/ZKP wiring.
- ******************************/
-
-/* ===================== ID RESOLVER (follows your HTML) ===================== */
+/* ===================== Auto‑ID Resolver (follows your HTML) ===================== */
 var ID = (function(){
   function get(id){ return document.getElementById(id); }
   function pick(candidates){
     for (var i=0;i<candidates.length;i++){ var el=get(candidates[i]); if (el) return {id:candidates[i], el:el}; }
     return {id:candidates[0], el:null};
   }
-  // central registry of semantic roles → candidate ids (put YOUR ids first if you tweak)
   var map = {
     // Wallet / dashboard
     connectWalletBtn: ['connect-wallet','connectMetaMaskBtn','connectWallet','connectWalletButton'],
@@ -687,7 +568,7 @@ var ID = (function(){
     catchOutResultText:['catchOutResultText','catchOutPayload','payloadOut'],
     btnCopyCatchOut:  ['btnCopyCatchOut','copyCatchOut','copyPayload'],
 
-    // QR viewer
+    // QR viewer (optional UI)
     qrCollapse:       ['qrCollapse','qrPanel','qrSection'],
     qrCanvas:         ['catchOutQRCanvas','qrCanvas'],
     qrIndicator:      ['qrIndicator','qrIndex','qrCounter'],
@@ -731,9 +612,8 @@ var ID = (function(){
 
     // Misc
     themeToggle:      ['theme-toggle','toggleTheme'],
-    utcTime:          ['utcTime','utc-label'],
+    utcTime:          ['utcTime','utc-label']
   };
-
   function el(key){ var c=map[key]||[key]; var r=pick(c); return r.el; }
   function id(key){ var c=map[key]||[key]; var r=pick(c); return r.id; }
   function on(key, ev, fn){
@@ -745,22 +625,10 @@ var ID = (function(){
   return {el:el, id:id, on:on, setText:setText, map:map};
 })();
 
-/* ===================== CORE CONSTANTS / LOGIC (unchanged) ===================== */
-// Everything from here down is the same secure logic we finalized:
-// - offline-first IndexedDB vault
-// - compact CBOR + AES-GCM P2P (v3)
-// - biometric (WebAuthn) + ZKP wiring and BioGuard lockout
-// - TVM EVM adapter (claim/mint/swap) with occ===1 on-chain rule
-// (For brevity, the core is identical to the previous delivery, only UI selectors now use ID.*)
-
-/* --- (The full core from our last version, intact) --- */
-/* Utilities, CBOR, DB, Vault, Segments, Crypto, Biometric, BioGuard, P2P, TVM adapter, BioVault API ... */
-/* To keep this message readable, I’m not duplicating the 1000+ lines again;
-   but the shipped file you paste contains the full core exactly as before. */
-
-/* ===================== UI WIRING (using ID resolver) ===================== */
+/* ===================== UI wiring (biometric + ZKP + wallet + P2P modals) ===================== */
 (function(){
   function showAlert(msg){ try{ alert(msg); }catch(e){} }
+  function byId(id){ return document.getElementById(id); }
 
   // Wallet connect
   ID.on('connectWalletBtn','click', async function(){
@@ -808,7 +676,7 @@ var ID = (function(){
     catch(e){ showAlert(e&&e.message?e.message:e); }
   });
 
-  // Catch-Out form
+  // P2P: Catch‑Out form
   var coForm = ID.el('catchOutForm');
   if (coForm) coForm.addEventListener('submit', async function(ev){
     ev.preventDefault();
@@ -816,26 +684,21 @@ var ID = (function(){
     var amt  = parseInt(((ID.el('coAmount')||{}).value||'0'),10);
     var note = (ID.el('coNote')||{}).value||'';
     if(!recv || !amt || amt<=0) return showAlert('Invalid input.');
-    // NOTE: replace with your shared transport key negotiation
+    // NOTE: replace with your negotiated shared key
     var sharedKeyBytes = (function(){ var a=new Uint8Array(32); crypto.getRandomValues(a); return a; })();
     var sender = (await Vault.getConfig()).ethereumAddress || await BioVault.myIdentity();
     var pkt = await BioVault.p2pPrepareSend(String(sender), String(recv), amt, sharedKeyBytes, note);
     var ta = ID.el('catchOutResultText'); if(ta) ta.value = JSON.stringify(pkt);
-    showAlert('Catch-Out created.');
+    showAlert('Catch‑Out created.');
   });
 
-  // Copy Catch-Out
+  // Copy Catch‑Out
   ID.on('btnCopyCatchOut','click', function(){
     var ta = ID.el('catchOutResultText'); if(!ta) return;
     navigator.clipboard.writeText(ta.value||'').then(function(){ showAlert('Copied.'); });
   });
 
-  // QR viewer (lazy render; uses the same QR code implementation as before)
-  // (the QR functions from the previous file remain; they now call IDs via ID.el())
-  // Example:
-  // var btnPrev = ID.el('qrPrev'); if(btnPrev) btnPrev.addEventListener('click', function(){ ... });
-
-  // Catch-In form
+  // P2P: Catch‑In form
   var ciForm = ID.el('catchInForm');
   if (ciForm) ciForm.addEventListener('submit', async function(ev){
     ev.preventDefault();
@@ -844,7 +707,7 @@ var ID = (function(){
     var sharedKeyBytes = (function(){ var a=new Uint8Array(32); crypto.getRandomValues(a); return a; })();
     var receiver = (await Vault.getConfig()).ethereumAddress || await BioVault.myIdentity();
     await BioVault.p2pReceiveApply(String(receiver), obj, sharedKeyBytes);
-    showAlert('Catch-In applied.');
+    showAlert('Catch‑In applied.');
   });
 
   // Theme toggle
@@ -856,5 +719,44 @@ var ID = (function(){
   }, 1000);
 })();
 
-/* ===================== BOOT ===================== */
-BioVault.init().catch(function(e){ try{ alert(e&&e.message?e.message:e); }catch(_e){} });
+/* ===================== Readiness gate + queued showSection ===================== */
+(function () {
+  var queuedSections = [];
+  var originalShow = typeof window.showSection === 'function' ? window.showSection : function(id){ _log('showSection placeholder for', id); };
+
+  window.showSection = function(id) {
+    if (window.BioVault && window.BioVault.ready === true) {
+      try { return originalShow(id); } catch (e) { _err('showSection error:', e); }
+    } else {
+      _log('App not ready; queuing showSection(\"' + id + '\")');
+      queuedSections.push(id);
+    }
+  };
+
+  window.BioVaultReady = false;
+  window.BioVaultReadyPromise = new Promise(function(resolve){ window.addEventListener('biovault-ready', resolve, { once: true }); });
+
+  function onReady() {
+    window.BioVaultReady = true;
+    // If index later sets a more specific showSection, keep it
+    if (typeof window._realShowSection === 'function') originalShow = window._realShowSection;
+    // Drain queue
+    while (queuedSections.length) {
+      var id = queuedSections.shift();
+      try { originalShow(id); } catch (e) { _err('queued showSection failed:', e); }
+    }
+    window.dispatchEvent(new Event('biovault-ready'));
+  }
+
+  // Hook BioVault.init to fire onReady
+  var _init = BioVault.init;
+  BioVault.init = async function() {
+    var r = await _init.call(BioVault);
+    try { _log('App ready'); } catch(_){}
+    onReady();
+    return r;
+  };
+})();
+
+/* ===================== Boot ===================== */
+BioVault.init().catch(function(e){ _err('Init failed:', e&&e.message?e.message:e); });
