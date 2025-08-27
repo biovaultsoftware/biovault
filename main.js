@@ -775,3 +775,159 @@ BioVault.init().catch(function(e){ err('Init failed:', e && e.message ? e.messag
 [ES2018] No optional chaining / private fields / numeric separators; zero external libraries.
 [CRYPTO] If Ethereum provider exists, personal_sign is used; else P-256 ECDSA for offline P2P signatures (on-chain flow unaffected).
 */ 
+/******************************
+ * EVM adapter — TVM contract integration
+ * - Uses window.ethereum + ethers (lazy-loaded) for on-chain calls.
+ * - Consumes proofs from BioVault.exportOnchainClaim().
+ * - Keeps P2P fully separate.
+ ******************************/
+
+(function(){
+  // Addresses already defined above; re-use:
+  var TVM_ADDRESS  = (typeof TVM_CONTRACT_ADDRESS !== 'undefined') ? TVM_CONTRACT_ADDRESS : '';
+  var USDT_ADDRESS = (typeof USDT_ADDRESS !== 'undefined') ? USDT_ADDRESS : '';
+
+  // Minimal ABIs: adjust ONLY if your finalized contract uses different names/structs.
+  // These match the finalized baseline: claim with one-hop segments only, mint from USDT, swap to/from USDT.
+  var ERC20_ABI = [
+    "function approve(address spender, uint256 amount) external returns (bool)",
+    "function allowance(address owner, address spender) external view returns (uint256)",
+    "function balanceOf(address owner) external view returns (uint256)",
+    "function decimals() external view returns (uint8)"
+  ];
+
+  // Claim struct assumed by the finalized TVM contract:
+  // struct ClaimItem {
+  //   bytes32 id;
+  //   address owner;
+  //   address previousOwner;
+  //   address originalOwner;
+  //   uint256 ownershipChangeCount;
+  //   uint256 genesis;
+  // }
+  //
+  // interface:
+  //   function claim(ClaimItem[] calldata items) external;
+  //   function mintFromUSDT(uint256 usdtAmount) external;
+  //   function swapTVMForUSDT(uint256 amountIn, uint256 minOut) external;
+  //   function swapUSDTForTVM(uint256 amountIn, uint256 minOut) external;
+  //
+  var TVM_ABI = [
+    "function claim(tuple(bytes32 id,address owner,address previousOwner,address originalOwner,uint256 ownershipChangeCount,uint256 genesis)[] items) external",
+    "function mintFromUSDT(uint256 usdtAmount) external",
+    "function swapTVMForUSDT(uint256 amountIn, uint256 minOut) external",
+    "function swapUSDTForTVM(uint256 amountIn, uint256 minOut) external"
+  ];
+
+  function ensureEthers() {
+    return new Promise(function(resolve, reject){
+      if (window.ethers) return resolve();
+      var s = document.createElement('script');
+      s.src = "https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js";
+      s.onload = function(){ resolve(); };
+      s.onerror = function(){ reject(new Error('Failed to load ethers.js')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  var EVM = {
+    provider: null,
+    signer: null,
+    tvm: null,
+    usdt: null,
+    account: null,
+    chainId: null,
+
+    async connect() {
+      if (!window.ethereum) throw new Error('No Ethereum provider (window.ethereum) found');
+      await ensureEthers();
+      this.provider = new window.ethers.providers.Web3Provider(window.ethereum, 'any');
+      var accts = await this.provider.send('eth_requestAccounts', []);
+      this.signer = this.provider.getSigner();
+      this.account = (accts && accts[0]) ? accts[0].toLowerCase() : null;
+      var net = await this.provider.getNetwork();
+      this.chainId = net.chainId;
+
+      this.usdt = new window.ethers.Contract(USDT_ADDRESS, ERC20_ABI, this.signer);
+      this.tvm  = new window.ethers.Contract(TVM_ADDRESS,  TVM_ABI,  this.signer);
+
+      return { account: this.account, chainId: this.chainId };
+    },
+
+    // Turn vault bundle → contract ClaimItem[]
+    _vaultToClaimItems: function(bundle) {
+      var utils = window.ethers.utils;
+      var items = [];
+      for (var i=0;i<bundle.length;i++) {
+        var it = bundle[i];
+        // id → bytes32 (deterministic): keccak256(utf8(id))
+        var idBytes32 = utils.keccak256(utils.toUtf8Bytes(it.id));
+        var occ = window.ethers.BigNumber.from(it.occ || 1);
+        var genesis = window.ethers.BigNumber.from((it.proof && it.proof.genesis) || GENESIS_BIO_CONSTANT);
+        items.push({
+          id: idBytes32,
+          owner: (it.owner||'').toLowerCase(),
+          previousOwner: (it.previous||'').toLowerCase(),
+          originalOwner: (it.original||'').toLowerCase(),
+          ownershipChangeCount: occ,
+          genesis: genesis
+        });
+      }
+      return items;
+    },
+
+    // Claims only one-hop segments exported by the vault.
+    async claimFromVault(maxCount) {
+      if (!this.tvm) await this.connect();
+      var bundle = await window.BioVault.exportOnchainClaim(maxCount|0);
+      if (!bundle.length) throw new Error('No on-chain-eligible segments (occ === 1)');
+      var items = this._vaultToClaimItems(bundle);
+      var tx = await this.tvm.claim(items);
+      return tx; // wait with: await tx.wait()
+    },
+
+    // Approve USDT for TVM if needed
+    async ensureUSDTAllowance(amount) {
+      if (!this.usdt) await this.connect();
+      var current = await this.usdt.allowance(this.account, TVM_ADDRESS);
+      if (current.gte(amount)) return true;
+      var tx = await this.usdt.approve(TVM_ADDRESS, amount);
+      await tx.wait();
+      return true;
+    },
+
+    // Mint TVM by paying USDT to the contract
+    async mintFromUSDT(usdtAmountRaw) {
+      if (!this.tvm) await this.connect();
+      var usdtDecimals = await this.usdt.decimals();
+      var amt = window.ethers.utils.parseUnits(String(usdtAmountRaw), usdtDecimals);
+      await this.ensureUSDTAllowance(amt);
+      var tx = await this.tvm.mintFromUSDT(amt);
+      return tx;
+    },
+
+    // Swap TVM -> USDT via contract
+    async swapTVMForUSDT(amountTVMRaw, minOutUSDT) {
+      if (!this.tvm) await this.connect();
+      // TVM assumed 18 decimals unless your contract specifies otherwise
+      var amtIn  = window.ethers.utils.parseUnits(String(amountTVMRaw), 18);
+      var minOut = window.ethers.utils.parseUnits(String(minOutUSDT), 6); // USDT 6 decimals typical
+      var tx = await this.tvm.swapTVMForUSDT(amtIn, minOut);
+      return tx;
+    },
+
+    // Swap USDT -> TVM via contract
+    async swapUSDTForTVM(amountUSDTRaw, minOutTVM) {
+      if (!this.tvm) await this.connect();
+      var usdtDecimals = await this.usdt.decimals();
+      var amtIn  = window.ethers.utils.parseUnits(String(amountUSDTRaw), usdtDecimals);
+      var minOut = window.ethers.utils.parseUnits(String(minOutTVM), 18);
+      await this.ensureUSDTAllowance(amtIn);
+      var tx = await this.tvm.swapUSDTForTVM(amtIn, minOut);
+      return tx;
+    }
+  };
+
+  // expose
+  window.BioVault.EVM = EVM;
+})();
