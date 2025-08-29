@@ -95,9 +95,13 @@ let usdtContract = null;
 let account = null;
 let chainId = null;
 let transactionLock = false;
+let lastCatchOutPayload = null;
+
 const SESSION_URL_KEY = 'last_session_url';
 const VAULT_UNLOCKED_KEY = 'vaultUnlocked';
 const VAULT_LOCK_KEY = 'vaultLock';
+const VAULT_BACKUP_KEY = 'vault.backup';
+
 
 // ---------- CONSTANTS (all used below) ----------
 const BIO_TOLERANCE = 720; // seconds: biometric freshness window
@@ -2074,6 +2078,14 @@ async function init() {
     if (!ta) return;
     navigator.clipboard.writeText(ta.value || '').then(function(){ UI.showAlert('Payload copied to clipboard.'); });
   });
+  async function showCatchOutResultModal(s){ 
+  const ta = document.getElementById('catchOutResultText');
+  if (ta) ta.value = s;
+  // no-op or show your modal here
+}
+function renderQrFrame(){ /* no-op until QR UI is wired */ }
+function downloadFramesZip(){ /* no-op until ZIP UI is wired */ }
+
 
   // QR collapse: render first time when opened
   var qrCollapseEl = byId('qrCollapse');
