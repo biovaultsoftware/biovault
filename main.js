@@ -72,6 +72,16 @@ const MAX_IDLE = 15 * 60 * 1000;
 const HMAC_KEY = new TextEncoder().encode("BalanceChainHMACSecret");
 const WALLET_CONNECT_PROJECT_ID = 'c4f79cc9f2f73b737d4d06795a48b4a5';
 
+// Safe UI stubs (replace with real implementations in your UI layer)
+async function showCatchOutResultModal(s) {
+  const ta = document.getElementById('catchOutResultText');
+  if (ta) ta.value = s;
+  // TODO: show modal / toast as desired
+}
+function renderQrFrame() { /* TODO: implement QR paging render */ }
+function downloadFramesZip() { /* TODO: implement ZIP download for QR frames */ }
+
+
 // ---- QR/ZIP/Chart integration constants ----
 const QR_CHUNK_MAX = 900;     // safe per-frame payload length for QR (approx, ECC M)
 const QR_SIZE = 512;          // px
@@ -2078,14 +2088,6 @@ async function init() {
     if (!ta) return;
     navigator.clipboard.writeText(ta.value || '').then(function(){ UI.showAlert('Payload copied to clipboard.'); });
   });
-  async function showCatchOutResultModal(s){ 
-  const ta = document.getElementById('catchOutResultText');
-  if (ta) ta.value = s;
-  // no-op or show your modal here
-}
-function renderQrFrame(){ /* no-op until QR UI is wired */ }
-function downloadFramesZip(){ /* no-op until ZIP UI is wired */ }
-
 
   // QR collapse: render first time when opened
   var qrCollapseEl = byId('qrCollapse');
