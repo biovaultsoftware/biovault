@@ -10,7 +10,7 @@
  *        with backward-compat import for v:1/v:2.
  ******************************/
 
-// ---------- Base Setup / Global Constants ----------
+// ---------- Base Setup / Global Constants ----------//
 const DB_NAME = 'BioVaultDB';
 const DB_VERSION = 4; // bumped for new fields
 const VAULT_STORE = 'vault';
@@ -195,12 +195,14 @@ function merkleRoot(hashes /* array of 0x..32B */) {
 }
 
 // Segment index bitmap compression (compact segment set)
-function segmentBitmap(indices) {
-  const max = Math.max(...indices, 0);
+function segmentBitmap(indices){
+  if (!indices || indices.length === 0) return '0x';
+  const max = Math.max(...indices);
   const bytes = new Uint8Array(Math.floor(max / 8) + 1);
-  for (const i of indices) bytes[Math.floor(i / 8)] |= (1 << (i % 8));
-  return '0x' + Buffer.from(bytes).toString('hex');
+  for (const i of indices) bytes[i >> 3] |= (1 << (i & 7));
+  return ethers.hexlify(bytes);
 }
+
 
 // Biometric recency / tolerance gate
 function checkBioFreshness(ts /* seconds */) {
@@ -419,9 +421,119 @@ let __storageCheckTimer = setInterval(() => {
 }, STORAGE_CHECK_INTERVAL);
 
 // ---------- HIGH-LEVEL FLOWS ----------
-async function composeAndSendMint({...args}) { /* unchanged; omitted for brevity */ }
-async function composeAndSendTransfer({...args}) { /* unchanged; omitted for brevity */ }
-async function composeCatchIn({...args}) { /* unchanged; omitted for brevity */ }
+// ---------- HIGH-LEVEL FLOWS YOU CAN CALL ----------
+
+// 1) TVM Mint flow (one or many segments)
+async function composeAndSendMint({
+  segments,         // [segmentIndex,...]
+  vaultOwner,       // address
+  currentOwner,     // address (must differ from vault owner)
+  currentBioConst,  // uint256
+  biometricZKP,     // {commit: bytes32, ts: seconds}
+  chainId,
+  vaultId,
+  receiverDeviceKeyHash, // bytes32 for envelope
+  signer            // ethers.Signer for `from`
+}) {
+  const from = await signer.getAddress();
+  if (from.toLowerCase() !== currentOwner.toLowerCase()) {
+    throw new Error('Signer must match currentOwner for mint claim');
+  }
+  const proofs = segments.map(sIdx =>
+    buildTvmMintSegmentProof({
+      segmentIndex: sIdx,
+      vaultOwner,
+      currentOwner,
+      currentBioConst,
+      biometricZKP,
+      chainId,
+      vaultId
+    })
+  );
+  autoProofs = proofs;
+  autoUserBioConstant = currentBioConst;
+
+  const { payload, claimDigest } = await buildCompactPayload({
+    from, to: currentOwner, chainId,
+    deviceKeyHashReceiver: receiverDeviceKeyHash,
+    userBioConstant: currentBioConst,
+    proofs
+  });
+  payload.sig = await signClaimDigest(signer, claimDigest);
+  await exportProofToBlockchain(payload);
+  return payload;
+}
+// 2) P2P Transfer flow
+async function composeAndSendTransfer({
+  segments,         // [segmentIndex,...]
+  originalOwner,    // address (historical)
+  currentOwner,     // sender (must be current)
+  receiver,         // new current owner
+  currentBioConst,
+  biometricZKP,
+  chainId,
+  vaultId,
+  nonceForSpent,
+  receiverDeviceKeyHash,
+  signer
+}) {
+  const from = await signer.getAddress();
+  if (from.toLowerCase() !== currentOwner.toLowerCase()) throw new Error('Sender must be current owner');
+
+  const proofs = segments.map(sIdx =>
+    buildP2PTransferSegmentProof({
+      segmentIndex: sIdx,
+      originalOwner,
+      currentOwner,
+      receiver,
+      previousOwner: currentOwner,
+      currentBioConst,
+      biometricZKP,
+      chainId,
+      vaultId,
+      nonceForSpent
+    })
+  );
+  autoProofs = proofs;
+  autoUserBioConstant = currentBioConst;
+
+  const { payload, claimDigest } = await buildCompactPayload({
+    from, to: receiver, chainId,
+    deviceKeyHashReceiver: receiverDeviceKeyHash,
+    userBioConstant: currentBioConst,
+    proofs
+  });
+  payload.sig = await signClaimDigest(signer, claimDigest);
+  await exportProofToBlockchain(payload);
+  return payload;
+}
+
+// 3) Previous-owner Catch-in (anti double-spend)
+async function composeCatchIn({
+  previousOwner,   // address = msg.sender signer
+  deviceKeyHash,   // bytes32 (local device)
+  userBioConstant,
+  signer
+}) {
+  const from = await signer.getAddress();
+  if (from.toLowerCase() !== previousOwner.toLowerCase()) throw new Error('Only previous owner can catch-in');
+
+  if (!autoProofs || !autoProofs.length) throw new Error('No prior proofs cached to catch-in');
+  const { proofsHash, claimDigest } = buildCatchInClaim({
+    user: previousOwner,
+    proofs: autoProofs,
+    deviceKeyHash,
+    userBioConstant,
+    nonce: ++autoNonce // bump nonce for uniqueness
+  });
+
+  const sig = await signClaimDigest(signer, claimDigest);
+  const payload = { user: previousOwner, proofsHash, deviceKeyHash, ubc: userBioConstant, nonce: autoNonce, sig };
+  lastCatchOutPayload = payload;
+  // send to chain/relayer:
+  await exportProofToBlockchain({ type: 'catch-in', ...payload });
+  return payload;
+}
 
 let vaultData = {
   bioIBAN: null,
@@ -1864,6 +1976,96 @@ async function persistVaultData(saltBuf) {
   }
   await DB.saveVaultDataToDB(iv, ciphertext, saltBase64);
 }
+
+// ---------- Catch-Out Result helpers (QR / ZIP) ----------
+function splitIntoFrames(str, maxLen) {
+  var chunks = [];
+  for (var i=0;i<str.length;i+=maxLen) chunks.push(str.slice(i, i+maxLen));
+  var total = chunks.length;
+  var out = [];
+  for (var j=0;j<total;j++) out.push('BC|' + (j+1) + '|' + total + '|' + chunks[j]);
+  return out;
+}
+function updateQrIndicator() {
+  var ind = document.getElementById('qrIndicator');
+  var nav = document.getElementById('qrNav');
+  if (!ind || !nav) return;
+  if (lastQrFrames.length <= 1) { nav.style.display = 'none'; }
+  else {
+    nav.style.display = 'flex';
+    ind.textContent = (lastQrFrameIndex + 1) + ' / ' + lastQrFrames.length;
+  }
+}
+async function renderQrFrame() {
+  await ensureQrLib();
+  var canvas = document.getElementById('catchOutQRCanvas');
+  if (!canvas || !window.QRCode) return;
+  var text = lastQrFrames[lastQrFrameIndex] || '';
+  try {
+    await window.QRCode.toCanvas(canvas, text, { width: QR_SIZE, margin: QR_MARGIN, errorCorrectionLevel: 'M' });
+  } catch (e) {
+    console.warn('[BioVault] QR render failed', e);
+  }
+  updateQrIndicator();
+}
+async function prepareFramesForPayload(payloadStr) {
+  lastQrFrames = splitIntoFrames(payloadStr, QR_CHUNK_MAX);
+  lastQrFrameIndex = 0;
+  updateQrIndicator();
+}
+async function downloadFramesZip() {
+  await ensureQrLib(); await ensureZipLib();
+  if (!window.JSZip) { UI.showAlert('ZIP library could not load.'); return; }
+  var zip = new window.JSZip();
+  // add payload
+  zip.file('payload.json', lastCatchOutPayloadStr || '{}');
+  // add manifest
+  zip.file('frames_manifest.json', JSON.stringify({ version:1, total:lastQrFrames.length, size:QR_SIZE, ecLevel:'M', prefix:'BC|i|N|' }, null, 2));
+
+  // Render each frame to PNG
+  for (var i=0;i<lastQrFrames.length;i++) {
+    var c = document.createElement('canvas');
+    c.width = QR_SIZE; c.height = QR_SIZE;
+    try {
+      await window.QRCode.toCanvas(c, lastQrFrames[i], { width: QR_SIZE, margin: QR_MARGIN, errorCorrectionLevel: 'M' });
+      var dataURL = c.toDataURL('image/png');
+      var base64 = dataURL.split(',')[1];
+      zip.file('qr_' + String(i+1).padStart(3,'0') + '.png', base64, { base64:true });
+    } catch (e) {
+      console.warn('Frame render failed (#'+(i+1)+')', e);
+    }
+  }
+
+  var blob = await zip.generateAsync({ type:'blob' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'catchout_qr_frames.zip'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Open result modal and prime textarea + clipboard
+async function showCatchOutResultModal(payloadStr) {
+  var ta = document.getElementById('catchOutResultText');
+  if (ta) ta.value = payloadStr;
+
+  try { await navigator.clipboard.writeText(payloadStr); } catch(e){ console.warn('Clipboard copy failed', e); }
+
+  var qrColl = document.getElementById('qrCollapse');
+  if (qrColl && qrColl.classList.contains('show')) {
+    var collapse = window.bootstrap ? new bootstrap.Collapse(qrColl, { toggle:false }) : null;
+    if (collapse) collapse.hide();
+    else qrColl.classList.remove('show');
+  }
+
+  await prepareFramesForPayload(payloadStr);
+
+  var modalEl = document.getElementById('modalCatchOutResult');
+  if (modalEl) {
+    var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
+    if (m) m.show(); else modalEl.style.display = 'block';
+  }
+}
+
 // ---------- Migrations (production-grade safety) ----------
 async function migrateSegmentsV4() {
   const segs = await DB.loadSegmentsFromDB();
