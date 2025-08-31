@@ -1480,7 +1480,7 @@ const Proofs = {
         unlockIntegrityProof: unlockIntegrityProof,
         spentProof: spentProof,
         ownershipChangeCount: 1,
-        biometricZKP: biometricZKP
+        biometricZKP: biometricZKP.commit   // <-- was biometricZKP
       });
     }
 
@@ -1730,9 +1730,11 @@ const P2P = {
         iv: Encryption.bufferToBase64(enc.iv),
         ct: Encryption.bufferToBase64(enc.ciphertext)
       };
+      // Encode the v:3 envelope itself as CBOR and present it as base64
 
       lastCatchOutPayload = payload;
-      lastCatchOutPayloadStr = JSON.stringify(payload);
+      const cborEnvelope = CBOR.encode(payload);          // Uint8Array (binary)
+      lastCatchOutPayloadStr = _u8ToB64(cborEnvelope);    // base64 string
       await showCatchOutResultModal(lastCatchOutPayloadStr);
 
     } finally {
@@ -1750,10 +1752,19 @@ const P2P = {
 
       if (payloadStr.length > 1200000) return UI.showAlert('Payload too large.');
 
-      var envelope;
-      try { envelope = JSON.parse(payloadStr); } catch (e) { return UI.showAlert('Invalid payload JSON.'); }
+      let envelope = null;
+      try { envelope = JSON.parse(payloadStr); } catch (_) { /* not JSON */ }
+      // If not JSON, try base64->CBOR decode (v:3 CBOR envelope)
+      if (!envelope) {
+        try {
+          const bytes = Encryption.base64ToBuffer(payloadStr);    // ArrayBuffer
+          const u8 = new Uint8Array(bytes);
+          envelope = CBOR.decode(u8);
+        } catch (e) {
+          return UI.showAlert('Invalid payload: neither JSON nor base64-CBOR.');
+        }
+      }
       if (!envelope) return UI.showAlert('Malformed payload.');
-
       // Replay protection
       if (!envelope.nonce) return UI.showAlert('Malformed payload: missing nonce.');
       if (await DB.hasReplayNonce(envelope.nonce)) return UI.showAlert('Duplicate transfer detected (replay).');
@@ -2017,8 +2028,8 @@ async function downloadFramesZip() {
   await ensureQrLib(); await ensureZipLib();
   if (!window.JSZip) { UI.showAlert('ZIP library could not load.'); return; }
   var zip = new window.JSZip();
-  // add payload
-  zip.file('payload.json', lastCatchOutPayloadStr || '{}');
+  // add payload as CBOR (base64-encoded for portability)
+  zip.file('payload.cbor.b64', lastCatchOutPayloadStr || '');
   // add manifest
   zip.file('frames_manifest.json', JSON.stringify({ version:1, total:lastQrFrames.length, size:QR_SIZE, ecLevel:'M', prefix:'BC|i|N|' }, null, 2));
 
