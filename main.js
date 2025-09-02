@@ -72,16 +72,6 @@ const MAX_IDLE = 15 * 60 * 1000;
 const HMAC_KEY = new TextEncoder().encode("BalanceChainHMACSecret");
 const WALLET_CONNECT_PROJECT_ID = 'c4f79cc9f2f73b737d4d06795a48b4a5';
 
-// Safe UI stubs (replace with real implementations in your UI layer)
-async function showCatchOutResultModal(s) {
-  const ta = document.getElementById('catchOutResultText');
-  if (ta) ta.value = s;
-  // TODO: show modal / toast as desired
-}
-function renderQrFrame() { /* TODO: implement QR paging render */ }
-function downloadFramesZip() { /* TODO: implement ZIP download for QR frames */ }
-
-
 // ---- QR/ZIP/Chart integration constants ----
 const QR_CHUNK_MAX = 900;     // safe per-frame payload length for QR (approx, ECC M)
 const QR_SIZE = 512;          // px
@@ -106,12 +96,14 @@ let account = null;
 let chainId = null;
 let transactionLock = false;
 let lastCatchOutPayload = null;
+// New: keep the raw CBOR bytes and a default filename for re-download
+var lastCatchOutPayloadBytes = null;
+var lastCatchOutFileName = "";
 
 const SESSION_URL_KEY = 'last_session_url';
 const VAULT_UNLOCKED_KEY = 'vaultUnlocked';
 const VAULT_LOCK_KEY = 'vaultLock';
 const VAULT_BACKUP_KEY = 'vault.backup';
-
 
 // ---------- CONSTANTS (all used below) ----------
 const BIO_TOLERANCE = 720; // seconds: biometric freshness window
@@ -197,9 +189,12 @@ function merkleRoot(hashes /* array of 0x..32B */) {
 // Segment index bitmap compression (compact segment set)
 function segmentBitmap(indices){
   if (!indices || indices.length === 0) return '0x';
-  const max = Math.max(...indices);
+  const max = Math.max.apply(null, indices);
   const bytes = new Uint8Array(Math.floor(max / 8) + 1);
-  for (const i of indices) bytes[i >> 3] |= (1 << (i & 7));
+  for (var ii=0; ii<indices.length; ii++) {
+    var i = indices[ii];
+    bytes[i >> 3] |= (1 << (i & 7));
+  }
   return ethers.hexlify(bytes);
 }
 
@@ -207,7 +202,7 @@ function segmentBitmap(indices){
 // Biometric recency / tolerance gate
 function checkBioFreshness(ts /* seconds */) {
   if (Math.abs(nowSec() - ts) > BIO_TOLERANCE) {
-    throw new Error(`Biometric proof outside tolerance window of ${BIO_TOLERANCE}s`);
+    throw new Error('Biometric proof outside tolerance window of ' + BIO_TOLERANCE + 's');
   }
 }
 
@@ -223,13 +218,13 @@ async function encryptForReceiver(receiverDeviceKeyHashHex, bytes) {
     ['deriveKey']
   );
   const key = await crypto.subtle.deriveKey(
-    { name: 'HKDF', salt, info: new Uint8Array([]), hash: 'SHA-256' },
+    { name: 'HKDF', salt: salt, info: new Uint8Array([]), hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
     ['encrypt']
   );
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, bytes));
   return {
     iv: ethers.hexlify(iv),
     salt: ethers.hexlify(salt),
@@ -237,7 +232,7 @@ async function encryptForReceiver(receiverDeviceKeyHashHex, bytes) {
   };
 }
 async function decryptFromSender(receiverDeviceKeyHashHex, envelope) {
-  const { iv, salt, ct } = envelope;
+  const iv = envelope.iv, salt = envelope.salt, ct = envelope.ct;
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
     ethers.getBytes(receiverDeviceKeyHashHex),
@@ -258,6 +253,14 @@ async function decryptFromSender(receiverDeviceKeyHashHex, envelope) {
     ethers.getBytes(ct)
   );
   return new Uint8Array(pt);
+}
+
+function downloadBytes(filename, u8, mime){
+  const blob = new Blob([u8], { type: mime || 'application/cbor' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1500);
 }
 
 // ---------- OWNERSHIP RULES (enforced in proof composers) ----------
@@ -290,20 +293,20 @@ function buildTvmMintSegmentProof({
   const ownershipProof = encodeOwnershipProof({
     originalOwner: vaultOwner,
     previousOwner: vaultOwner,
-    currentOwner
+    currentOwner: currentOwner
   });
-  const unlockIntegrityProof = encodeUnlockIntegrityProof({ chainId, vaultId, purpose: 'mint' });
+  const unlockIntegrityProof = encodeUnlockIntegrityProof({ chainId: chainId, vaultId: vaultId, purpose: 'mint' });
   const spentProof = ethers.ZeroHash;
   const ownershipChangeCount = 1;
   checkBioFreshness(biometricZKP.ts);
 
   return {
-    segmentIndex,
-    currentBioConst,
-    ownershipProof,
-    unlockIntegrityProof,
-    spentProof,
-    ownershipChangeCount,
+    segmentIndex: segmentIndex,
+    currentBioConst: currentBioConst,
+    ownershipProof: ownershipProof,
+    unlockIntegrityProof: unlockIntegrityProof,
+    spentProof: spentProof,
+    ownershipChangeCount: ownershipChangeCount,
     biometricZKP: biometricZKP.commit
   };
 }
@@ -317,22 +320,22 @@ function buildP2PTransferSegmentProof({
     throw new Error('Transfer composer: `previousOwner` must equal `currentOwner` before hand-off');
   }
   const ownershipProof = encodeOwnershipProof({
-    originalOwner,
+    originalOwner: originalOwner,
     previousOwner: currentOwner,
     currentOwner: receiver
   });
-  const unlockIntegrityProof = encodeUnlockIntegrityProof({ chainId, vaultId, purpose: 'transfer' });
-  const spentProof = encodeSpentProof({ previousOwner: currentOwner, segmentIndex, nonce: nonceForSpent });
+  const unlockIntegrityProof = encodeUnlockIntegrityProof({ chainId: chainId, vaultId: vaultId, purpose: 'transfer' });
+  const spentProof = encodeSpentProof({ previousOwner: currentOwner, segmentIndex: segmentIndex, nonce: nonceForSpent });
   const ownershipChangeCount = 0;
   checkBioFreshness(biometricZKP.ts);
 
   return {
-    segmentIndex,
-    currentBioConst,
-    ownershipProof,
-    unlockIntegrityProof,
-    spentProof,
-    ownershipChangeCount,
+    segmentIndex: segmentIndex,
+    currentBioConst: currentBioConst,
+    ownershipProof: ownershipProof,
+    unlockIntegrityProof: unlockIntegrityProof,
+    spentProof: spentProof,
+    ownershipChangeCount: ownershipChangeCount,
     biometricZKP: biometricZKP.commit
   };
 }
@@ -340,7 +343,7 @@ function buildP2PTransferSegmentProof({
 // ---------- PREVIOUS-OWNER CATCH-IN ----------
 function buildCatchInClaim({ user, proofs, deviceKeyHash, userBioConstant, nonce }) {
   if (proofs.length === 0) throw new Error('No proofs to claim');
-  if (proofs.length > MAX_PROOFS_LENGTH) throw new Error(`Too many proofs; max ${MAX_PROOFS_LENGTH}`);
+  if (proofs.length > MAX_PROOFS_LENGTH) throw new Error('Too many proofs; max ' + MAX_PROOFS_LENGTH);
 
   const proofHashes = proofs.map(hashSegmentProof);
   const proofsHash = merkleRoot(proofHashes);
@@ -350,35 +353,37 @@ function buildCatchInClaim({ user, proofs, deviceKeyHash, userBioConstant, nonce
     [CLAIM_TYPEHASH, user, proofsHash, deviceKeyHash, userBioConstant, nonce]
   );
 
-  return { proofsHash, claimDigest };
+  return { proofsHash: proofsHash, claimDigest: claimDigest };
 }
 
 // ---------- COMPACT PAYLOAD BUILDER (Merkle + bitmap + envelope) ----------
 async function buildCompactPayload({
-  version = 2, from, to, chainId, deviceKeyHashReceiver, userBioConstant, proofs
+  version, from, to, chainId, deviceKeyHashReceiver, userBioConstant, proofs
 }) {
-  if (proofs.length > MAX_PROOFS_LENGTH) throw new Error(`Too many proofs; max ${MAX_PROOFS_LENGTH}`);
+  if (!version) version = 2;
+  if (proofs.length > MAX_PROOFS_LENGTH) throw new Error('Too many proofs; max ' + MAX_PROOFS_LENGTH);
 
   const proofHashes = proofs.map(hashSegmentProof);
   const proofsRoot = merkleRoot(proofHashes);
-  const segments = proofs.map(p => p.segmentIndex).sort((a,b)=>a-b);
+  const segments = proofs.map(function(p){ return p.segmentIndex; }).sort(function(a,b){ return a-b; });
   const bitmap = segmentBitmap(segments);
 
-  const { claimDigest } = buildCatchInClaim({
+  const r = buildCatchInClaim({
     user: from,
-    proofs,
+    proofs: proofs,
     deviceKeyHash: autoDeviceKeyHash || ethers.ZeroHash,
     userBioConstant: autoUserBioConstant || userBioConstant,
     nonce: autoNonce
   });
+  const claimDigest = r.claimDigest;
 
-  const raw = new TextEncoder().encode(JSON.stringify({ chainId, proofs }));
+  const raw = new TextEncoder().encode(JSON.stringify({ chainId: chainId, proofs: proofs }));
   const envelope = await encryptForReceiver(deviceKeyHashReceiver, raw);
 
   const payload = {
     v: version,
-    from,
-    to,
+    from: from,
+    to: to,
     root: proofsRoot,
     segbm: bitmap,
     dk: deviceKeyHashReceiver,
@@ -388,7 +393,7 @@ async function buildCompactPayload({
     sig: autoSignature
   };
 
-  return { payload, claimDigest };
+  return { payload: payload, claimDigest: claimDigest };
 }
 
 // ---------- SIGN & SEND ----------
@@ -415,7 +420,7 @@ function importVault(armoredText) {
 }
 
 // ---------- PERIODIC STORAGE CHECK ----------
-let __storageCheckTimer = setInterval(() => {
+let __storageCheckTimer = setInterval(function(){
   const exists = !!localStorage.getItem(VAULT_BACKUP_KEY);
   if (!exists) console.warn('Vault backup missing; consider running backupVault()');
 }, STORAGE_CHECK_INTERVAL);
@@ -439,26 +444,28 @@ async function composeAndSendMint({
   if (from.toLowerCase() !== currentOwner.toLowerCase()) {
     throw new Error('Signer must match currentOwner for mint claim');
   }
-  const proofs = segments.map(sIdx =>
-    buildTvmMintSegmentProof({
+  const proofs = segments.map(function(sIdx){
+    return buildTvmMintSegmentProof({
       segmentIndex: sIdx,
-      vaultOwner,
-      currentOwner,
-      currentBioConst,
-      biometricZKP,
-      chainId,
-      vaultId
-    })
-  );
+      vaultOwner: vaultOwner,
+      currentOwner: currentOwner,
+      currentBioConst: currentBioConst,
+      biometricZKP: biometricZKP,
+      chainId: chainId,
+      vaultId: vaultId
+    });
+  });
   autoProofs = proofs;
   autoUserBioConstant = currentBioConst;
 
-  const { payload, claimDigest } = await buildCompactPayload({
-    from, to: currentOwner, chainId,
+  const b = await buildCompactPayload({
+    from: from, to: currentOwner, chainId: chainId,
     deviceKeyHashReceiver: receiverDeviceKeyHash,
     userBioConstant: currentBioConst,
-    proofs
+    proofs: proofs
   });
+  const payload = b.payload;
+  const claimDigest = b.claimDigest;
   payload.sig = await signClaimDigest(signer, claimDigest);
   await exportProofToBlockchain(payload);
   return payload;
@@ -480,29 +487,31 @@ async function composeAndSendTransfer({
   const from = await signer.getAddress();
   if (from.toLowerCase() !== currentOwner.toLowerCase()) throw new Error('Sender must be current owner');
 
-  const proofs = segments.map(sIdx =>
-    buildP2PTransferSegmentProof({
+  const proofs = segments.map(function(sIdx){
+    return buildP2PTransferSegmentProof({
       segmentIndex: sIdx,
-      originalOwner,
-      currentOwner,
-      receiver,
+      originalOwner: originalOwner,
+      currentOwner: currentOwner,
+      receiver: receiver,
       previousOwner: currentOwner,
-      currentBioConst,
-      biometricZKP,
-      chainId,
-      vaultId,
-      nonceForSpent
-    })
-  );
+      currentBioConst: currentBioConst,
+      biometricZKP: biometricZKP,
+      chainId: chainId,
+      vaultId: vaultId,
+      nonceForSpent: nonceForSpent
+    });
+  });
   autoProofs = proofs;
   autoUserBioConstant = currentBioConst;
 
-  const { payload, claimDigest } = await buildCompactPayload({
-    from, to: receiver, chainId,
+  const b = await buildCompactPayload({
+    from: from, to: receiver, chainId: chainId,
     deviceKeyHashReceiver: receiverDeviceKeyHash,
     userBioConstant: currentBioConst,
-    proofs
+    proofs: proofs
   });
+  const payload = b.payload;
+  const claimDigest = b.claimDigest;
   payload.sig = await signClaimDigest(signer, claimDigest);
   await exportProofToBlockchain(payload);
   return payload;
@@ -519,19 +528,19 @@ async function composeCatchIn({
   if (from.toLowerCase() !== previousOwner.toLowerCase()) throw new Error('Only previous owner can catch-in');
 
   if (!autoProofs || !autoProofs.length) throw new Error('No prior proofs cached to catch-in');
-  const { proofsHash, claimDigest } = buildCatchInClaim({
+  const c = buildCatchInClaim({
     user: previousOwner,
     proofs: autoProofs,
-    deviceKeyHash,
-    userBioConstant,
+    deviceKeyHash: deviceKeyHash,
+    userBioConstant: userBioConstant,
     nonce: ++autoNonce // bump nonce for uniqueness
   });
 
-  const sig = await signClaimDigest(signer, claimDigest);
-  const payload = { user: previousOwner, proofsHash, deviceKeyHash, ubc: userBioConstant, nonce: autoNonce, sig };
+  const sig = await signClaimDigest(signer, c.claimDigest);
+  const payload = { user: previousOwner, proofsHash: c.proofsHash, deviceKeyHash: deviceKeyHash, ubc: userBioConstant, nonce: autoNonce, sig: sig };
   lastCatchOutPayload = payload;
   // send to chain/relayer:
-  await exportProofToBlockchain({ type: 'catch-in', ...payload });
+  await exportProofToBlockchain({ type: 'catch-in', user: previousOwner, proofsHash: c.proofsHash, deviceKeyHash: deviceKeyHash, ubc: userBioConstant, nonce: autoNonce, sig: sig });
   return payload;
 }
 
@@ -631,7 +640,7 @@ const DB = {
         lockoutTimestamp: vaultData.lockoutTimestamp || null,
         authAttempts: vaultData.authAttempts || 0
       });
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
+      tx.oncomplete = resolve; tx.onerror = function(e){ reject(e.target.error); };
     });
   },
 
@@ -653,7 +662,7 @@ const DB = {
           });
         } catch (e) { console.error('[BioVault] Corrupted vault record', e); resolve(null); }
       };
-      get.onerror = (e)=>reject(e.target.error);
+      get.onerror = function(e){ reject(e.target.error); };
     });
   },
 
@@ -662,7 +671,7 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([VAULT_STORE], 'readwrite');
       tx.objectStore(VAULT_STORE).clear();
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
+      tx.oncomplete = resolve; tx.onerror = function(e){ reject(e.target.error); };
     });
   },
 
@@ -671,7 +680,7 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([PROOFS_STORE], 'readwrite');
       tx.objectStore(PROOFS_STORE).put({ id:'autoProofs', data: bundle });
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
+      tx.oncomplete = resolve; tx.onerror = function(e){ reject(e.target.error); };
     });
   },
   loadProofsFromDB: async () => {
@@ -679,8 +688,8 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([PROOFS_STORE], 'readonly');
       const get = tx.objectStore(PROOFS_STORE).get('autoProofs');
-      get.onsuccess = ()=>resolve(get.result ? get.result.data : null);
-      get.onerror = (e)=>reject(e.target.error);
+      get.onsuccess = function(){ resolve(get.result ? get.result.data : null); };
+      get.onerror = function(e){ reject(e.target.error); };
     });
   },
 
@@ -689,7 +698,7 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([SEGMENTS_STORE], 'readwrite');
       tx.objectStore(SEGMENTS_STORE).put(segment);
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
+      tx.oncomplete = resolve; tx.onerror = function(e){ reject(e.target.error); };
     });
   },
   loadSegmentsFromDB: async () => {
@@ -697,8 +706,8 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([SEGMENTS_STORE], 'readonly');
       const getAll = tx.objectStore(SEGMENTS_STORE).getAll();
-      getAll.onsuccess = ()=>resolve(getAll.result || []);
-      getAll.onerror = (e)=>reject(e.target.error);
+      getAll.onsuccess = function(){ resolve(getAll.result || []); };
+      getAll.onerror = function(e){ reject(e.target.error); };
     });
   },
   deleteSegmentFromDB: async (segmentIndex) => {
@@ -706,7 +715,7 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([SEGMENTS_STORE], 'readwrite');
       tx.objectStore(SEGMENTS_STORE).delete(segmentIndex);
-      tx.oncomplete = resolve; tx.onerror = (e)=>reject(e.target.error);
+      tx.oncomplete = resolve; tx.onerror = function(e){ reject(e.target.error); };
     });
   },
   getSegment: async (segmentIndex) => {
@@ -714,8 +723,8 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([SEGMENTS_STORE], 'readonly');
       const req = tx.objectStore(SEGMENTS_STORE).get(segmentIndex);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = (e) => reject(e.target.error);
+      req.onsuccess = function(){ resolve(req.result || null); };
+      req.onerror = function(e){ reject(e.target.error); };
     });
   },
   hasReplayNonce: async (nonce) => {
@@ -723,8 +732,8 @@ const DB = {
     return new Promise((res, rej) => {
       const tx = db.transaction(['replays'],'readonly');
       const g = tx.objectStore('replays').get(nonce);
-      g.onsuccess = () => res(!!g.result);
-      g.onerror = (e) => rej(e.target.error);
+      g.onsuccess = function(){ res(!!g.result); };
+      g.onerror = function(e){ rej(e.target.error); };
     });
   },
   putReplayNonce: async (nonce) => {
@@ -732,7 +741,7 @@ const DB = {
     return new Promise((res, rej) => {
       const tx = db.transaction(['replays'],'readwrite');
       tx.objectStore('replays').put({ nonce: nonce, ts: Date.now() });
-      tx.oncomplete = res; tx.onerror = (e)=>rej(e.target.error);
+      tx.oncomplete = res; tx.onerror = function(e){ rej(e.target.error); };
     });
   }
 };
@@ -806,7 +815,7 @@ const Biometric = {
       });
       if (!assertion) return null;
       const hex = await Utils.sha256Hex(String.fromCharCode.apply(null, new Uint8Array(assertion.signature)));
-      return { commit: Utils.to0x(hex), ts: nowSec() }; // ← include freshness timestamp
+      return { commit: Utils.to0x(hex), ts: nowSec() }; // include freshness timestamp
     } catch (err) {
       console.error('[BioVault] Biometric ZKP failed', err);
       return null;
@@ -887,7 +896,6 @@ function recordUnlock(n){
   vaultData.caps.monthUsedSeg += n;
   vaultData.caps.yearUsedSeg  += n;
 }
-
 
 // ---------- Vault ----------
 const Vault = {
@@ -1125,7 +1133,8 @@ const Segment = {
       const seg = {
         segmentIndex: idx,
         currentOwner: vaultData.bioIBAN,
-        ownershipChangeCount: 1, // newly unlocked -> 1 change
+        ownershipChangeCount: 1 // newly unlocked -> 1 change
+        ,
         claimed: false,
         history: [
           { event:'Initialization', timestamp: ts, from:'Locked', to:vaultData.bioIBAN, bioConst: GENESIS_BIO_CONSTANT + idx, integrityHash: initHash },
@@ -1733,9 +1742,17 @@ const P2P = {
       // Encode the v:3 envelope itself as CBOR and present it as base64
 
       lastCatchOutPayload = payload;
-      const cborEnvelope = CBOR.encode(payload);          // Uint8Array (binary)
-      lastCatchOutPayloadStr = _u8ToB64(cborEnvelope);    // base64 string
-      await showCatchOutResultModal(lastCatchOutPayloadStr);
+      // ---- CBOR encode the v:3 envelope (binary) ----
+        const cborEnvelope = CBOR.encode(payload);        // Uint8Array
+        lastCatchOutPayloadBytes = cborEnvelope;          // keep raw bytes
+        lastCatchOutPayloadStr   = _u8ToB64(cborEnvelope);// keep for QR fallback
+        lastCatchOutFileName     = 'biovault_catchout_' + header.nonce + '.cbor';
+
+        // 1) Immediately offer a .cbor file download (primary UX)
+        downloadBytes(lastCatchOutFileName, lastCatchOutPayloadBytes, 'application/cbor');
+
+        // 2) Still open the result modal, but show Download + QR options (no raw text)
+        await showCatchOutResultModal(); // note: no args; it will use the cached globals
 
     } finally {
       transactionLock = false;
@@ -1810,6 +1827,50 @@ const P2P = {
       transactionLock = false;
     }
   }
+
+  
+};
+
+// New: direct import from a .cbor file
+P2P.importCatchInFile = async function(file){
+    if (transactionLock) return UI.showAlert('Another transaction is in progress. Please wait.');
+    transactionLock = true;
+    try {
+        if (!vaultUnlocked) return UI.showAlert('Vault locked.');
+        if (!file) return UI.showAlert('No file selected.');
+
+        // Read .cbor as ArrayBuffer → Uint8Array → CBOR.decode
+        const buf = await file.arrayBuffer();
+        const u8  = new Uint8Array(buf);
+        const envelope = CBOR.decode(u8);
+
+        if (!envelope || !envelope.nonce) return UI.showAlert('Malformed payload file.');
+        if (await DB.hasReplayNonce(envelope.nonce)) return UI.showAlert('Duplicate transfer detected (replay).');
+        await DB.putReplayNonce(envelope.nonce);
+
+        // v3 branch (same path as text import)
+        if (envelope.v === 3 && envelope.iv && envelope.ct) {
+        const p2pKey = await deriveP2PKey(envelope.from, envelope.to, envelope.nonce);
+        const bytes  = await Encryption.decryptBytes(
+            p2pKey,
+            Encryption.base64ToBuffer(envelope.iv),
+            Encryption.base64ToBuffer(envelope.ct)
+        );
+        const body = CBOR.decode(bytes); // { c: <Uint8Array>, t: <int>, n: <text> }
+        if (!body || !(body.c instanceof Uint8Array)) return UI.showAlert('Decrypted CBOR invalid.');
+        const expandedChains = ChainsCodec.decode(body.c); // [{i,h:[...]}]
+        await handleIncomingChains(fromCompactChains(expandedChains), envelope.from, envelope.to);
+        return;
+        }
+
+        // v2/v1 fallbacks not expected for .cbor, but we could add if needed
+        return UI.showAlert('Unsupported or malformed payload file.');
+    } catch (e) {
+        console.error('CatchIn file failed', e);
+        UI.showAlert('Catch In file failed: ' + (e.message || e));
+    } finally {
+        transactionLock = false;
+    }
 };
 
 // ---------- Notifications ----------
@@ -2054,28 +2115,38 @@ async function downloadFramesZip() {
   URL.revokeObjectURL(url);
 }
 
-// Open result modal and prime textarea + clipboard
-async function showCatchOutResultModal(payloadStr) {
-  var ta = document.getElementById('catchOutResultText');
-  if (ta) ta.value = payloadStr;
-
-  try { await navigator.clipboard.writeText(payloadStr); } catch(e){ console.warn('Clipboard copy failed', e); }
-
-  var qrColl = document.getElementById('qrCollapse');
-  if (qrColl && qrColl.classList.contains('show')) {
-    var collapse = window.bootstrap ? new bootstrap.Collapse(qrColl, { toggle:false }) : null;
-    if (collapse) collapse.hide();
-    else qrColl.classList.remove('show');
+async function showCatchOutResultModal() {
+  // Hide the big textarea if present
+  const ta = document.getElementById('catchOutResultText');
+  if (ta) {
+    ta.value = '';
+    ta.closest('.form-group, .mb-3, .input-group')?.classList?.add('d-none');
   }
 
-  await prepareFramesForPayload(payloadStr);
+  // If there’s a "Download .cbor" button, wire it up
+  const btnDownload = document.getElementById('btnDownloadCbor');
+  if (btnDownload) {
+    btnDownload.classList.remove('d-none');
+    btnDownload.onclick = () => {
+      if (lastCatchOutPayloadBytes && lastCatchOutPayloadBytes.length) {
+        downloadBytes(lastCatchOutFileName || 'catchout.cbor', lastCatchOutPayloadBytes, 'application/cbor');
+      } else {
+        UI.showAlert('No payload to download.');
+      }
+    };
+  }
 
-  var modalEl = document.getElementById('modalCatchOutResult');
+  // Prepare QR frames from the cached base64 (fallback/offline)
+  if (lastCatchOutPayloadStr) await prepareFramesForPayload(lastCatchOutPayloadStr);
+
+  // Show the modal
+  const modalEl = document.getElementById('modalCatchOutResult');
   if (modalEl) {
-    var m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
+    const m = window.bootstrap ? new bootstrap.Modal(modalEl) : null;
     if (m) m.show(); else modalEl.style.display = 'block';
   }
 }
+
 
 // ---------- Migrations (production-grade safety) ----------
 async function migrateSegmentsV4() {
@@ -2339,6 +2410,12 @@ async function init() {
       if (window.bootstrap) {
         var m2 = bootstrap.Modal.getInstance(document.getElementById('modalCatchIn'));
         if (m2) m2.hide();
+        // Allow pasting a data: URL for the CBOR envelope
+        if (typeof payloadStr === 'string' && payloadStr.startsWith('data:application/cbor;base64,')) {
+        payloadStr = payloadStr.split(',')[1];
+        }
+
+
       }
     } catch (e) {
       console.error('CatchIn failed', e);
@@ -2347,28 +2424,44 @@ async function init() {
       if (sp) sp.classList.add('d-none');
       if (btn) btn.disabled = false;
     }
+    
+
   });
+  
 
   // Claim modal submit → call on-chain claim (auto proofs)
-  var formClaim = byId('formClaim');
-  if (formClaim) formClaim.addEventListener('submit', async function(ev){
-    ev.preventDefault();
-    var sp = byId('spSubmitClaim'); if (sp) sp.classList.remove('d-none');
-    var btn = byId('btnSubmitClaim'); if (btn) btn.disabled = true;
-    try {
-      await ContractInteractions.claimTVM();
-      if (window.bootstrap) {
-        var m3 = bootstrap.Modal.getInstance(document.getElementById('modalClaim'));
-        if (m3) m3.hide();
-      }
-    } catch (e) {
-      console.error('Claim failed', e);
-      UI.showAlert('Claim failed: ' + (e.message || e));
-    } finally {
-      if (sp) sp.classList.add('d-none');
-      if (btn) btn.disabled = false;
-    }
-  });
+    var formClaim = byId('formClaim');
+    if (formClaim) formClaim.addEventListener('submit', async function(ev){
+        ev.preventDefault();
+        var sp = byId('spSubmitClaim'); if (sp) sp.classList.remove('d-none');
+        var btn = byId('btnSubmitClaim'); if (btn) btn.disabled = true;
+        try {
+        await ContractInteractions.claimTVM();
+        if (window.bootstrap) {
+            var m3 = bootstrap.Modal.getInstance(document.getElementById('modalClaim'));
+            if (m3) m3.hide();
+        }
+        } catch (e) {
+        console.error('Claim failed', e);
+        UI.showAlert('Claim failed: ' + (e.message || e));
+        } finally {
+        if (sp) sp.classList.add('d-none');
+        if (btn) btn.disabled = false;
+        }
+    });
+    var btnImportFile = document.getElementById('btnImportCatchInFile');
+    if (btnImportFile) {
+    btnImportFile.addEventListener('click', async function(){
+        const fi = document.getElementById('catchInFile');
+        const f  = fi && fi.files && fi.files[0];
+        if (!f) { UI.showAlert('Please choose a .cbor file.'); return; }
+        await P2P.importCatchInFile(f);
+        if (window.bootstrap) {
+        const m2 = bootstrap.Modal.getInstance(document.getElementById('modalCatchIn'));
+        if (m2) m2.hide();
+        }
+    });
+}
 
   // Idle Timeout
   var idleTimer;
