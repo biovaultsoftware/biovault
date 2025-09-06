@@ -415,7 +415,8 @@
     </button>
   </section>
 
-  <!-- 🔽🔽🔽 ADD: Bootstrap Modals (Catch-Out, Result with QR, Catch-In, Claim) 🔽🔽🔽 -->
+
+  <!-- 🔽🔽🔽 Bootstrap Modals (Catch-Out, Result, Catch-In, Claim) 🔽🔽🔽 -->
 
   <!-- Catch-Out Modal -->
   <div class="modal fade" id="modalCatchOut" tabindex="-1" aria-labelledby="modalCatchOutLabel" aria-hidden="true">
@@ -427,9 +428,9 @@
         </div>
         <div class="modal-body">
           <div class="mb-3">
-            <label for="receiverBioModal" class="form-label">Receiver Bio-IBAN / DeviceKeyHash</label>
-            <input type="text" class="form-control" id="receiverBioModal" placeholder="0x... (bytes32)" required />
-            <div class="invalid-feedback">Please enter a receiver Bio-IBAN / DeviceKeyHash.</div>
+            <label for="receiverBioModal" class="form-label">Receiver Bio-IBAN</label>
+            <input type="text" class="form-control" id="receiverBioModal" placeholder="0x..." required />
+            <div class="invalid-feedback">Please enter a receiver Bio-IBAN.</div>
           </div>
           <div class="mb-3">
             <label for="amountSegmentsModal" class="form-label">Amount (Segments / SHE units)</label>
@@ -451,7 +452,7 @@
     </div>
   </div>
 
-  <!-- Catch-Out Result Modal (with QR + Multi-QR + ZIP) -->
+  <!-- Catch-Out Result Modal (CBOR + QR + Multi-QR + ZIP) -->
   <div class="modal fade" id="modalCatchOutResult" tabindex="-1" aria-labelledby="modalCatchOutResultLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg">
       <div class="modal-content" id="modalCatchOutResultContent">
@@ -460,13 +461,17 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <p class="mb-2">Share this JSON offline (QR/NFC/text). It’s also copied to your clipboard.</p>
+          <p class="mb-2">
+            Share this <strong>CBOR envelope</strong> offline (.cbor). You can download the file, show as QR frames, or ZIP all PNGs.
+          </p>
+
+          <!-- Textarea is kept for legacy/diagnostics; main.js hides it automatically -->
           <textarea id="catchOutResultText" class="form-control" rows="10" readonly></textarea>
 
           <!-- Collapsible QR block (Show QR toggles this) -->
           <div class="collapse mt-3" id="qrCollapse">
             <div class="d-flex justify-content-center my-3" id="catchOutQRWrap">
-              <canvas id="catchOutQRCanvas" width="256" height="256" aria-label="Catch-Out QR"></canvas>
+              <canvas id="catchOutQRCanvas" width="512" height="512" aria-label="Catch-Out QR"></canvas>
             </div>
 
             <!-- Multi-QR navigator -->
@@ -476,21 +481,26 @@
               <button id="qrNext" class="btn btn-outline-light btn-sm" type="button" aria-label="Next QR">Next</button>
             </div>
 
-            <p id="catchOutQRNote" class="text-center small text-muted mb-0"></p>
+            <p id="catchOutQRNote" class="text-center small text-muted mb-0">
+              If multiple frames are shown, scan all in order. You can also download a ZIP of PNGs.
+            </p>
           </div>
         </div>
         <div class="modal-footer">
-          <button type="button" id="btnCopyCatchOut" class="btn btn-outline-light">
-            Copy
-          </button>
-          <!-- 🔘 QR code button -->
+          <!-- Download CBOR file (shown/enabled by main.js) -->
+          <button type="button" id="btnDownloadCbor" class="btn btn-outline-light d-none">Download .cbor</button>
+
+          <!-- Copy (legacy/diagnostics) -->
+          <button type="button" id="btnCopyCatchOut" class="btn btn-outline-light">Copy</button>
+
+          <!-- QR code toggle -->
           <button type="button" class="btn btn-outline-light" data-bs-toggle="collapse" data-bs-target="#qrCollapse" aria-expanded="false" aria-controls="qrCollapse" id="btnShowQR">
             Show QR
           </button>
-          <!-- 📦 ZIP export -->
-          <button type="button" id="btnDownloadQRZip" class="btn btn-outline-light">
-            Download PNG ZIP
-          </button>
+
+          <!-- ZIP export -->
+          <button type="button" id="btnDownloadQRZip" class="btn btn-outline-light">Download PNG ZIP</button>
+
           <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Done</button>
         </div>
       </div>
@@ -506,14 +516,25 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <label for="catchInPayloadModal" class="form-label">Paste Catch-Out Payload JSON</label>
-          <textarea id="catchInPayloadModal" class="form-control" rows="10" placeholder='{"v":1,"from":"0x...","to":"0x...","chains":[...]}' required></textarea>
-          <div class="invalid-feedback">Please paste a valid JSON payload.</div>
+          <div class="mb-2">
+            <label for="catchInPayloadModal" class="form-label">Paste Payload</label>
+            <textarea id="catchInPayloadModal" class="form-control" rows="8"
+                      placeholder='Paste base64 CBOR (v3) or legacy JSON (v1/v2)…'></textarea>
+            <div class="form-text">Tip: For v3, you can also import the <code>.cbor</code> file directly below.</div>
+          </div>
+
+          <div class="d-flex align-items-center gap-2">
+            <label class="btn btn-outline-light mb-0">
+              Choose .cbor File
+              <input type="file" id="catchInFile" accept=".cbor,application/cbor" hidden />
+            </label>
+            <button type="button" id="btnImportCatchInFile" class="btn btn-outline-success">Import .cbor</button>
+          </div>
         </div>
         <div class="modal-footer">
           <button type="submit" id="btnImportCatchIn" class="btn btn-success">
             <span class="spinner-border spinner-border-sm me-2 d-none" id="spImportCatchIn" role="status" aria-hidden="true"></span>
-            Import
+            Import (Paste)
           </button>
         </div>
       </form>
@@ -529,17 +550,17 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
+          <!-- The on-chain claim is built automatically from local eligible segments (ownershipChangeCount === 1).
+               These fields can be hidden or left as helpers; main.js uses automatic selection. -->
           <div class="mb-3">
             <label for="claimStartModal" class="form-label">Start Index (same layer)</label>
-            <input type="number" class="form-control" id="claimStartModal" min="1" step="1" placeholder="e.g., 1201" required />
-            <div class="invalid-feedback">Enter a start index ≥ 1.</div>
+            <input type="number" class="form-control" id="claimStartModal" min="1" step="1" placeholder="e.g., 1201" />
           </div>
           <div class="mb-1">
             <label for="claimCountModal" class="form-label">Count (multiple of 12)</label>
-            <input type="number" class="form-control" id="claimCountModal" min="12" step="12" placeholder="e.g., 12, 24, 36…" required />
-            <div class="invalid-feedback">Count must be a positive multiple of 12.</div>
+            <input type="number" class="form-control" id="claimCountModal" min="12" step="12" placeholder="e.g., 12, 24, 36…" />
           </div>
-          <small class="text-muted">All indices must be consecutive and within one layer.</small>
+          <small class="text-muted">Eligible segments are selected automatically per rules.</small>
         </div>
         <div class="modal-footer">
           <button type="submit" id="btnSubmitClaim" class="btn btn-success">
@@ -552,6 +573,7 @@
   </div>
 
   <!-- 🔼🔼🔼 End modals 🔼🔼🔼 -->
+
 
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
