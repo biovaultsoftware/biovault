@@ -99,6 +99,34 @@
     #biovault:has(#vaultUI:not(.hidden)) > h2.neon-text {
       display: none;
     }
+    @media (max-width: 991.98px) {
+    /* Align menu to the left on mobile */
+    .navbar-collapse {
+      position: relative;
+      width: 100%;
+      padding: 0;
+      margin-top: 0.5rem; /* Small gap below navbar toggle */
+    }
+    .navbar-nav {
+      margin-left: 0 !important; /* Override ms-auto on mobile */
+      text-align: left;
+    }
+    .navbar-nav .nav-item {
+      width: 100%;
+    }
+  
+    /* Push content down when navbar is expanded */
+    .navbar-collapse.collapsing,
+    .navbar-collapse.show {
+      padding-bottom: 1rem; /* Space below menu items */
+    }
+    body {
+      padding-top: 56px; /* Height of navbar (adjust if needed) */
+    }
+    #biovault {
+      padding-top: 0; /* Reset section padding to avoid double padding */
+    }
+  }
     table { width: 100%; }
   </style>
 
