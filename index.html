@@ -93,6 +93,11 @@
     #lockedScreen { display: block; text-align: center; padding-top: 20vh; }
     #vaultUI { display: none; }
     .hidden { display: none; }
+    #vaultUI:not(.hidden) ~ #lockedScreen #enterVaultBtn,
+    #vaultUI:not(.hidden) ~ #lockedScreen .lead,
+    #vaultUI:not(.hidden) ~ #lockedScreen #lockedTitle {
+      display: none;
+    }
     table { width: 100%; }
   </style>
 
