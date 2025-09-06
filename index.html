@@ -6,28 +6,21 @@
     name="viewport"
     content="width=device-width, initial-scale=1.0" />
   <title>Ultimate TVM Ecosystem Dashboard - Balance Chain & Blockchain</title>
-
   <!-- Google Font: Roboto -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
-
   <!-- Bootstrap CSS for Responsive Layout -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-
   <!-- Chart.js for Visualizations -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
-
   <!-- Font Awesome for Icons -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" rel="stylesheet" />
-
   <!-- DOMPurify for Sanitization -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" defer></script>
-
   <!-- PWA Manifest -->
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#007bff" />
-
   <style>
     body {
       font-family: 'Roboto', sans-serif;
@@ -85,7 +78,7 @@
     }
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(20px); }
-      to   { opacity: 1; transform: translateY(0); }
+      to { opacity: 1; transform: translateY(0); }
     }
     .fade-in { animation: fadeIn 0.5s ease; }
     .neon-text { text-shadow: 0 0 5px #007bff, 0 0 10px #007bff; }
@@ -114,7 +107,7 @@
     .navbar-nav .nav-item {
       width: 100%;
     }
-  
+ 
     /* Push content down when navbar is expanded */
     .navbar-collapse.collapsing,
     .navbar-collapse.show {
@@ -128,8 +121,37 @@
     }
   }
     table { width: 100%; }
+    /* Modal theme matching PWA */
+    .modal-content {
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      color: #ffffff;
+      border: none;
+    }
+    .modal-header {
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .modal-footer {
+      border-top: 1px solid rgba(255,255,255,0.1);
+    }
+    .form-control {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #ffffff;
+    }
+    .form-control:focus {
+      border-color: #007bff;
+      box-shadow: 0 0 0 0.25rem rgba(0,123,255,0.25);
+    }
+    .form-label {
+      color: #ffffff;
+    }
+    .btn-close {
+      filter: invert(1);
+    }
+    .modal-dialog {
+      max-width: 90%; /* Larger size for better usability */
+    }
   </style>
-
   <!-- Safe stubs so inline onclicks don't crash before app boots -->
   <script>
     window.__BioVaultReady = false;
@@ -140,7 +162,6 @@
 </head>
 <body>
   <noscript><div class="alert alert-danger m-3">This app requires JavaScript.</div></noscript>
-
   <!-- Global Navbar -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-transparent fixed-top" role="navigation" aria-label="Main navigation">
     <div class="container">
@@ -162,7 +183,6 @@
       </div>
     </div>
   </nav>
-
   <!-- Landing Page Section -->
   <section id="landing" class="section landing active-section fade-in" aria-label="Landing">
     <div class="container">
@@ -171,7 +191,6 @@
         Enter the Offchain or Onchain World. BalanceChain: Superior to Blockchain, SWIFT, and Fiat – Instant, Offline-Capable, Zero-Fee P2P Transfers with SHE/ECF Framework and TVM Gateway.
         1 TVM = 12 SHE (fixed ratio). The USDT price of TVM is dynamic, updated annually on Jan 11 by a GDP/capita rule (never below 1 USD). Example (2025): 1 TVM ≈ 1.153 USDT (illustrative; not a peg).
       </p>
-
       <div class="row justify-content-center mt-5">
         <div class="col-md-4">
           <button class="btn btn-primary btn-lg w-100 mb-4" type="button" onclick="showSection('biovault')">
@@ -191,12 +210,10 @@
       </div>
     </div>
   </section>
-
   <!-- BioVault PWA Section (Decentralized MSL - Offchain) -->
   <section id="biovault" class="section container fade-in" aria-label="BioVault PWA">
     <h2 class="neon-text">BioVault PWA - Decentralized MSL (Micro Segments Ledger)</h2>
     <p class="lead">No authority, complete immutability and security. Manage SHE segments, generate proofs, and perform offline P2P transfers. Gateway to TVM blockchain for swaps and crypto entry.</p>
-
     <!-- White Paper -->
     <div class="whitepaper">
       <h3>BalanceChain White Paper</h3>
@@ -207,7 +224,6 @@
         <i class="fas fa-download me-2" aria-hidden="true"></i> Download Full White Paper
       </a>
     </div>
-
     <!-- Integrated Vault UI -->
     <div id="lockedScreen" aria-live="polite">
       <h3 id="lockedTitle">Locked Vault</h3>
@@ -215,18 +231,16 @@
         <i class="fas fa-unlock me-2" aria-hidden="true"></i> Enter Vault
       </button>
     </div>
-
     <div id="vaultUI" class="hidden">
         <div class="stat-box mb-2">
-      <div class="neon-text stat-label">Your Bio-IBAN</div>
+      <div class="stat-label">Your Bio-IBAN</div>
       <div class="d-flex align-items-center gap-2">
         <span id="bioIBAN" class="stat-value"></span>
         <button class="btn btn-sm btn-outline-light" type="button" aria-label="Copy Bio-IBAN" onclick="copyToClipboard('bioIBAN')">Copy</button>
       </div>
     </div>
-
     <div class="stat-box mb-2">
-      <div class="neon-text stat-label">Balance</div>
+      <div class="stat-label">Balance</div>
       <div class="stat-value">
         <span id="balanceSHE"></span> SHE (<span id="balanceTVM"></span> TVM)
       </div>
@@ -235,13 +249,12 @@
       <p class="mb-3">Bonus Constant: <span id="bonusConstant"></span></p>
       <p>UTC Time: <span id="utcTime"></span></p>
       <p>On-Chain Wallet Address: <span id="connectedAccount">Not connected</span></p>
-
       <div class="d-flex flex-wrap gap-2 my-3">
-        <button id="connectMetaMaskBtn" class="btn btn-primary" type="button">Connect MetaMask</button>
+        <button id="saveWalletBtn" class="btn btn-primary" type="button">Save Wallet</button>
+        <button id="connectMetaMaskBtn" class="btn btn-warning" type="button">Connect MetaMask</button>
         <button id="catchInBtn" class="btn btn-success" type="button">Catch In</button>
         <button id="catchOutBtn" class="btn btn-success" type="button">Catch Out</button>
       </div>
-
       <h4>Transaction History</h4>
       <table class="table table-dark table-striped">
         <thead>
@@ -249,32 +262,29 @@
         </thead>
         <tbody id="transactionHistory"></tbody>
       </table>
-
       <div class="d-flex flex-wrap gap-2 my-3">
         <button class="btn btn-outline-light" type="button" onclick="exportTransactions()">Export Transactions</button>
         <button class="btn btn-outline-light" type="button" onclick="backupVault()">Backup Vault</button>
+        <button class="btn btn-outline-light" type="button" onclick="exportFriendlyBackup()">Export Friendly Backup</button>
         <label class="btn btn-outline-light mb-0">
           Import .vault <input type="file" id="importVaultInput" accept=".vault" hidden />
         </label>
         <button id="lockVaultBtn" class="btn btn-danger" type="button">Lock Vault</button>
+        <button id="terminateVaultBtn" class="btn btn-danger" type="button">Terminate Vault</button>
       </div>
     </div>
-
     <!-- Export to Blockchain -->
     <button class="btn btn-info btn-lg w-100 mt-4" type="button" onclick="exportProofToBlockchain()">
       <i class="fas fa-upload me-2" aria-hidden="true"></i> Export Proof to Blockchain Dashboard
     </button>
-
     <button class="btn btn-outline-light back-btn w-100" type="button" onclick="showSection('landing')">
       <i class="fas fa-arrow-left me-2" aria-hidden="true"></i> Back
     </button>
   </section>
-
   <!-- Centralized SCL Overview Section -->
   <section id="scl" class="section container fade-in" aria-label="SCL Overview">
     <h2 class="neon-text">Centralized SCL (Serial Centric Ledger) Overview</h2>
     <p class="lead">For central banks, banks, money transfer companies, and centralized entities. Enables CBDC-fiat twins with full traceability, instant/offline zero-fee transfers for any currency (e.g., USD, Euro, Riyal). This PWA provides a demo/simulation; full implementation requires server-side integration.</p>
-
     <div class="whitepaper">
       <h3>SCL Key Features</h3>
       <ul>
@@ -291,22 +301,18 @@
         <i class="fas fa-info-circle me-2" aria-hidden="true"></i> Request SCL Demo
       </a>
     </div>
-
     <button class="btn btn-outline-light back-btn w-100" type="button" onclick="showSection('landing')">
       <i class="fas fa-arrow-left me-2" aria-hidden="true"></i> Back
     </button>
   </section>
-
   <!-- Blockchain Dashboard Section (Onchain - TVM Gateway) -->
   <section id="dashboard" class="section container fade-in" aria-label="Blockchain Dashboard">
     <h2 class="neon-text">TVM Blockchain Dashboard (Gateway to DLT)</h2>
     <p class="lead">Connect your wallet and interact with the TVM contract for claims, swaps, and exchanges. Fixed at 12 SHE per TVM with dynamic pricing. Serves as gateway for both MSL and SCL versions. Actions auto-populate from BalanceChain proofs for seamless UX—just click buttons.</p>
-
     <button id="connect-wallet" class="btn btn-warning btn-lg w-100 mb-4" type="button">
       <i class="fas fa-wallet me-2" aria-hidden="true"></i> Connect Wallet
     </button>
     <p id="wallet-address" class="text-center" aria-live="polite"></p>
-
     <!-- Overview Metrics -->
     <div class="row mb-4">
       <div class="col-md-3">
@@ -319,7 +325,6 @@
           </div>
         </div>
       </div>
-
       <div class="col-md-3">
         <div class="card text-center">
           <div class="card-body">
@@ -328,7 +333,6 @@
           </div>
         </div>
       </div>
-
       <div class="col-md-3">
         <div class="card text-center">
           <div class="card-body">
@@ -337,7 +341,6 @@
           </div>
         </div>
       </div>
-
       <div class="col-md-3">
         <div class="card text-center">
           <div class="card-body">
@@ -346,7 +349,6 @@
           </div>
         </div>
       </div>
-
       <div class="col-md-3">
         <div class="card text-center">
           <div class="card-body">
@@ -356,7 +358,6 @@
         </div>
       </div>
     </div>
-
     <!-- Action Buttons (Disabled until wallet connected) -->
     <div class="row">
       <div class="col-md-6 mb-3">
@@ -365,21 +366,18 @@
         </button>
         <div id="claim-loading" class="hidden">Loading...</div>
       </div>
-
       <div class="col-md-6 mb-3">
         <button id="exchange-tvm-btn" class="btn btn-warning btn-lg w-100" type="button" disabled>
           <i class="fas fa-unlock me-2" aria-hidden="true"></i> Exchange TVM for Segments (Auto)
         </button>
         <div id="exchange-loading" class="hidden">Loading...</div>
       </div>
-
       <div class="col-md-6 mb-3">
         <button id="swap-tvm-usdt-btn" class="btn btn-info btn-lg w-100" type="button" disabled>
           <i class="fas fa-right-left me-2" aria-hidden="true"></i> Swap TVM for USDT (Auto)
         </button>
         <div id="swap-loading" class="hidden">Loading...</div>
       </div>
-
       <div class="col-md-6 mb-3">
         <button id="swap-usdt-tvm-btn" class="btn btn-info btn-lg w-100" type="button" disabled>
           <i class="fas fa-right-left me-2" aria-hidden="true"></i> Swap USDT for TVM (Auto)
@@ -387,7 +385,6 @@
         <div id="swap-usdt-loading" class="hidden">Loading...</div>
       </div>
     </div>
-
     <!-- Pool & Layer Charts -->
     <div class="row">
       <div class="col-md-6">
@@ -401,7 +398,6 @@
         </div>
       </div>
     </div>
-
     <!-- Layer Reserves Table -->
     <table class="table table-dark table-striped mt-4">
       <thead>
@@ -409,15 +405,11 @@
       </thead>
       <tbody id="layer-table"><!-- JS Populated --></tbody>
     </table>
-
     <button class="btn btn-outline-light back-btn w-100" type="button" onclick="showSection('landing')">
       <i class="fas fa-arrow-left me-2" aria-hidden="true"></i> Back
     </button>
   </section>
-
-
   <!-- 🔽🔽🔽 Bootstrap Modals (Catch-Out, Result, Catch-In, Claim) 🔽🔽🔽 -->
-
   <!-- Catch-Out Modal -->
   <div class="modal fade" id="modalCatchOut" tabindex="-1" aria-labelledby="modalCatchOutLabel" aria-hidden="true">
     <div class="modal-dialog">
@@ -428,18 +420,14 @@
         </div>
         <div class="modal-body">
           <div class="mb-3">
-            <label for="receiverBioModal" class="form-label">Receiver Bio-IBAN</label>
-            <input type="text" class="form-control" id="receiverBioModal" placeholder="0x..." required />
-            <div class="invalid-feedback">Please enter a receiver Bio-IBAN.</div>
+            <label for="receiverBioModal" class="form-label">Receiver Bio-IBAN / DeviceKeyHash</label>
+            <input type="text" class="form-control" id="receiverBioModal" placeholder="0x... (bytes32)" required />
+            <div class="invalid-feedback">Please enter a receiver Bio-IBAN / DeviceKeyHash.</div>
           </div>
           <div class="mb-3">
             <label for="amountSegmentsModal" class="form-label">Amount (Segments / SHE units)</label>
             <input type="number" class="form-control" id="amountSegmentsModal" min="1" step="1" placeholder="12 = 1 TVM" required />
             <div class="invalid-feedback">Please enter a positive integer (e.g., 12).</div>
-          </div>
-          <div class="mb-3">
-            <label for="noteModal" class="form-label">Note (optional)</label>
-            <input type="text" class="form-control" id="noteModal" placeholder="What is this for?" />
           </div>
         </div>
         <div class="modal-footer">
@@ -451,7 +439,6 @@
       </form>
     </div>
   </div>
-
   <!-- Catch-Out Result Modal (CBOR + QR + Multi-QR + ZIP) -->
   <div class="modal fade" id="modalCatchOutResult" tabindex="-1" aria-labelledby="modalCatchOutResultLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg">
@@ -462,25 +449,19 @@
         </div>
         <div class="modal-body">
           <p class="mb-2">
-            Share this <strong>CBOR envelope</strong> offline (.cbor). You can download the file, show as QR frames, or ZIP all PNGs.
+            Share this <strong>CBOR envelope</strong> offline (.cbor).
           </p>
-
-          <!-- Textarea is kept for legacy/diagnostics; main.js hides it automatically -->
-          <textarea id="catchOutResultText" class="form-control" rows="10" readonly></textarea>
-
           <!-- Collapsible QR block (Show QR toggles this) -->
           <div class="collapse mt-3" id="qrCollapse">
             <div class="d-flex justify-content-center my-3" id="catchOutQRWrap">
               <canvas id="catchOutQRCanvas" width="512" height="512" aria-label="Catch-Out QR"></canvas>
             </div>
-
             <!-- Multi-QR navigator -->
             <div class="d-flex justify-content-between align-items-center mb-2" id="qrNav" style="display:none;">
               <button id="qrPrev" class="btn btn-outline-light btn-sm" type="button" aria-label="Previous QR">Prev</button>
               <span id="qrIndicator" class="small">1 / 1</span>
               <button id="qrNext" class="btn btn-outline-light btn-sm" type="button" aria-label="Next QR">Next</button>
             </div>
-
             <p id="catchOutQRNote" class="text-center small text-muted mb-0">
               If multiple frames are shown, scan all in order. You can also download a ZIP of PNGs.
             </p>
@@ -489,24 +470,17 @@
         <div class="modal-footer">
           <!-- Download CBOR file (shown/enabled by main.js) -->
           <button type="button" id="btnDownloadCbor" class="btn btn-outline-light d-none">Download .cbor</button>
-
-          <!-- Copy (legacy/diagnostics) -->
-          <button type="button" id="btnCopyCatchOut" class="btn btn-outline-light">Copy</button>
-
           <!-- QR code toggle -->
           <button type="button" class="btn btn-outline-light" data-bs-toggle="collapse" data-bs-target="#qrCollapse" aria-expanded="false" aria-controls="qrCollapse" id="btnShowQR">
             Show QR
           </button>
-
           <!-- ZIP export -->
           <button type="button" id="btnDownloadQRZip" class="btn btn-outline-light">Download PNG ZIP</button>
-
           <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Done</button>
         </div>
       </div>
     </div>
   </div>
-
   <!-- Catch-In Modal -->
   <div class="modal fade" id="modalCatchIn" tabindex="-1" aria-labelledby="modalCatchInLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg">
@@ -516,13 +490,6 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <div class="mb-2">
-            <label for="catchInPayloadModal" class="form-label">Paste Payload</label>
-            <textarea id="catchInPayloadModal" class="form-control" rows="8"
-                      placeholder='Paste base64 CBOR (v3) or legacy JSON (v1/v2)…'></textarea>
-            <div class="form-text">Tip: For v3, you can also import the <code>.cbor</code> file directly below.</div>
-          </div>
-
           <div class="d-flex align-items-center gap-2">
             <label class="btn btn-outline-light mb-0">
               Choose .cbor File
@@ -532,15 +499,11 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button type="submit" id="btnImportCatchIn" class="btn btn-success">
-            <span class="spinner-border spinner-border-sm me-2 d-none" id="spImportCatchIn" role="status" aria-hidden="true"></span>
-            Import (Paste)
-          </button>
+          <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Done</button>
         </div>
       </form>
     </div>
   </div>
-
   <!-- Claim TVM Modal -->
   <div class="modal fade" id="modalClaim" tabindex="-1" aria-labelledby="modalClaimLabel" aria-hidden="true">
     <div class="modal-dialog">
@@ -550,17 +513,17 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <!-- The on-chain claim is built automatically from local eligible segments (ownershipChangeCount === 1).
-               These fields can be hidden or left as helpers; main.js uses automatic selection. -->
           <div class="mb-3">
             <label for="claimStartModal" class="form-label">Start Index (same layer)</label>
-            <input type="number" class="form-control" id="claimStartModal" min="1" step="1" placeholder="e.g., 1201" />
+            <input type="number" class="form-control" id="claimStartModal" min="1" step="1" placeholder="e.g., 1201" required />
+            <div class="invalid-feedback">Enter a start index ≥ 1.</div>
           </div>
           <div class="mb-1">
             <label for="claimCountModal" class="form-label">Count (multiple of 12)</label>
-            <input type="number" class="form-control" id="claimCountModal" min="12" step="12" placeholder="e.g., 12, 24, 36…" />
+            <input type="number" class="form-control" id="claimCountModal" min="12" step="12" placeholder="e.g., 12, 24, 36…" required />
+            <div class="invalid-feedback">Count must be a positive multiple of 12.</div>
           </div>
-          <small class="text-muted">Eligible segments are selected automatically per rules.</small>
+          <small class="text-muted">All indices must be consecutive and within one layer.</small>
         </div>
         <div class="modal-footer">
           <button type="submit" id="btnSubmitClaim" class="btn btn-success">
@@ -571,13 +534,9 @@
       </form>
     </div>
   </div>
-
   <!-- 🔼🔼🔼 End modals 🔼🔼🔼 -->
-
-
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
-
   <!-- Boot loader: load Ethers with fallback, then load main.js -->
   <script>
     (function () {
@@ -591,7 +550,6 @@
           document.head.appendChild(s);
         });
       }
-
       async function loadEthers() {
         try {
           await inject('https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js');
@@ -602,7 +560,6 @@
           console.log('[BioVault] ethers ready (unpkg)');
         }
       }
-
       async function boot() {
         try {
           await loadEthers();
@@ -618,7 +575,6 @@
           }
         }
       }
-
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', boot, { once: true });
       } else {
