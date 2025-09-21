@@ -1058,7 +1058,7 @@ const Wallet = {
       if (ub) ub.textContent = ethers.formatUnits(tvmBal, 18) + ' TVM';
       const usdtBal = await usdtContract.balanceOf(account);
       if (uu) uu.textContent = ethers.formatUnits(usdtBal, 6) + ' USDT';
-      var e3 = document.getElementById('tvm-price'); if (e3) e3.textContent = '1.00 USDT';
+      var e3 = document.getElementById('tvm-price'); if (e3) e3.textContent = '1.153 USDT';
       var e4 = document.getElementById('pool-ratio'); if (e4) e4.textContent = '51% HI / 49% AI';
       var e5 = document.getElementById('avg-reserves'); if (e5) e5.textContent = '100M TVM';
     } catch (e) {
@@ -1982,68 +1982,6 @@ async function persistVaultData(saltBuf) {
   await DB.saveVaultDataToDB(iv, ciphertext, saltBase64);
 }
 // ---------- Catch-Out Result helpers (QR / ZIP) ----------
-function splitIntoFrames(str, maxLen) {
-  var chunks = [];
-  for (var i=0;i<str.length;i+=maxLen) chunks.push(str.slice(i, i+maxLen));
-  var total = chunks.length;
-  var out = [];
-  for (var j=0;j<total;j++) out.push('BC|' + (j+1) + '|' + total + '|' + chunks[j]);
-  return out;
-}
-function updateQrIndicator() {
-  var ind = document.getElementById('qrIndicator');
-  var nav = document.getElementById('qrNav');
-  if (!ind || !nav) return;
-  if (lastQrFrames.length <= 1) { nav.style.display = 'none'; }
-  else {
-    nav.style.display = 'flex';
-    ind.textContent = (lastQrFrameIndex + 1) + ' / ' + lastQrFrames.length;
-  }
-}
-async function renderQrFrame() {
-  await ensureQrLib();
-  var canvas = document.getElementById('catchOutQRCanvas');
-  if (!canvas || !window.QRCode) return;
-  var text = lastQrFrames[lastQrFrameIndex] || '';
-  try {
-    await window.QRCode.toCanvas(canvas, text, { width: QR_SIZE, margin: QR_MARGIN, errorCorrectionLevel: 'M' });
-  } catch (e) {
-    console.warn('[BioVault] QR render failed', e);
-  }
-  updateQrIndicator();
-}
-async function prepareFramesForPayload(payloadStr) {
-  lastQrFrames = splitIntoFrames(payloadStr, QR_CHUNK_MAX);
-  lastQrFrameIndex = 0;
-  updateQrIndicator();
-}
-async function downloadFramesZip() {
-  await ensureQrLib(); await ensureZipLib();
-  if (!window.JSZip) { UI.showAlert('ZIP library could not load.'); return; }
-  var zip = new window.JSZip();
-  // add payload as CBOR (base64-encoded for portability)
-  zip.file('payload.cbor.b64', lastCatchOutPayloadStr || '');
-  // add manifest
-  zip.file('frames_manifest.json', JSON.stringify({ version:1, total:lastQrFrames.length, size:QR_SIZE, ecLevel:'M', prefix:'BC|i|N|' }, null, 2));
-  // Render each frame to PNG
-  for (var i=0;i<lastQrFrames.length;i++) {
-    var c = document.createElement('canvas');
-    c.width = QR_SIZE; c.height = QR_SIZE;
-    try {
-      await window.QRCode.toCanvas(c, lastQrFrames[i], { width: QR_SIZE, margin: QR_MARGIN, errorCorrectionLevel: 'M' });
-      var dataURL = c.toDataURL('image/png');
-      var base64 = dataURL.split(',')[1];
-      zip.file('qr_' + String(i+1).padStart(3,'0') + '.png', base64, { base64:true });
-    } catch (e) {
-      console.warn('Frame render failed (#'+(i+1)+')', e);
-    }
-  }
-  var blob = await zip.generateAsync({ type:'blob' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = 'catchout_qr_frames.zip'; a.click();
-  URL.revokeObjectURL(url);
-}
 async function showCatchOutResultModal() {
   // Hide the big textarea if present
   const ta = document.getElementById('catchOutResultText');
@@ -2158,7 +2096,7 @@ async function init() {
       vaultData.joinTimestamp = Date.now();
       vaultData.deviceKeyHash = Utils.to0x(await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32))));
       vaultData.balanceSHE = INITIAL_BALANCE_SHE;
-      vaultData.bonusConstant = EXTRA_BONUS_TVM;
+      vaultData.bonusConstant = currentBioConst;
       const salt = Utils.rand(16);
       const pin = prompt("Set passphrase:");
       derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || ''), salt);
@@ -2267,55 +2205,7 @@ async function init() {
     if (!ta) return;
     navigator.clipboard.writeText(ta.value || '').then(function(){ UI.showAlert('Payload copied to clipboard.'); });
   });
-  // QR collapse: render first time when opened
-  var qrCollapseEl = byId('qrCollapse');
-  if (qrCollapseEl && window.bootstrap) {
-    qrCollapseEl.addEventListener('shown.bs.collapse', function(){ renderQrFrame(); });
-  } else if (qrCollapseEl) {
-    var btnShowQR = byId('btnShowQR');
-    if (btnShowQR) btnShowQR.addEventListener('click', function(){ setTimeout(renderQrFrame, 50); });
-  }
-  // Multi-QR Nav
-  var btnPrev = byId('qrPrev'); if (btnPrev) btnPrev.addEventListener('click', function(){
-    if (lastQrFrames.length === 0) return;
-    lastQrFrameIndex = (lastQrFrameIndex - 1 + lastQrFrames.length) % lastQrFrames.length;
-    renderQrFrame();
-  });
-  var btnNext = byId('qrNext'); if (btnNext) btnNext.addEventListener('click', function(){
-    if (lastQrFrames.length === 0) return;
-    lastQrFrameIndex = (lastQrFrameIndex + 1) % lastQrFrames.length;
-    renderQrFrame();
-  });
-  // Download ZIP of all QR frames
-  var btnZip = byId('btnDownloadQRZip');
-  if (btnZip) btnZip.addEventListener('click', function(){ downloadFramesZip(); });
-  // Catch-In form submit
-  var formCI = byId('formCatchIn');
-  if (formCI) formCI.addEventListener('submit', async function(ev){
-    ev.preventDefault();
-    var ta = byId('catchInPayloadModal');
-    var sp = byId('spImportCatchIn'); if (sp) sp.classList.remove('d-none');
-    var btn = byId('btnImportCatchIn'); if (btn) btn.disabled = true;
-    try {
-      await P2P.importCatchIn((ta&&ta.value) || '');
-      if (window.bootstrap) {
-        var m2 = bootstrap.Modal.getInstance(document.getElementById('modalCatchIn'));
-        if (m2) m2.hide();
-        // Allow pasting a data: URL for the CBOR envelope
-        if (typeof payloadStr === 'string' && payloadStr.startsWith('data:application/cbor;base64,')) {
-        payloadStr = payloadStr.split(',')[1];
-        }
-      }
-    } catch (e) {
-      console.error('CatchIn failed', e);
-      UI.showAlert('Catch In failed: ' + (e.message || e));
-    } finally {
-      if (sp) sp.classList.add('d-none');
-      if (btn) btn.disabled = false;
-    }
-   
-  });
- 
+      
   // Claim modal submit → call on-chain claim (auto proofs)
     var formClaim = byId('formClaim');
     if (formClaim) formClaim.addEventListener('submit', async function(ev){
