@@ -960,6 +960,18 @@ function disableDashboardButtons() {
   for (var i=0;i<ids.length;i++){ var b=document.getElementById(ids[i]); if (b) b.disabled = true; }
 }
 
+const ARBITRUM_ONE_PARAMS = {
+  chainId: '0xA4B1', // Hex for 42161
+  chainName: 'Arbitrum One',
+  nativeCurrency: {
+    name: 'Ethereum',
+    symbol: 'ETH',
+    decimals: 18
+  },
+  rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+  blockExplorerUrls: ['https://arbiscan.io']
+};
+
 // ---------- Wallet ----------
 const Wallet = {
   connectMetaMask: async () => {
@@ -968,7 +980,44 @@ const Wallet = {
     await provider.send('eth_requestAccounts', []);
     signer = await provider.getSigner();
     account = await signer.getAddress();
-    chainId = await provider.getNetwork().then(function(net){ return net.chainId; });
+    chainId = (await provider.getNetwork()).chainId;
+
+    // Check and switch chain if not matching
+    if (Number(chainId) !== EXPECTED_CHAIN_ID) {
+      try {
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x' + EXPECTED_CHAIN_ID.toString(16) }]
+        });
+        // Refresh chainId after switch
+        chainId = (await provider.getNetwork()).chainId;
+      } catch (switchError) {
+        // If chain not added (error code 4902), add it
+        if (switchError.code === 4902) {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [ARBITRUM_ONE_PARAMS]
+            });
+            // Switch after adding
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: '0x' + EXPECTED_CHAIN_ID.toString(16) }]
+            });
+            chainId = (await provider.getNetwork()).chainId;
+          } catch (addError) {
+            console.error('[BioVault] Chain add failed', addError);
+            UI.showAlert('Failed to add/switch to Arbitrum One. Please add it manually in your wallet.');
+            return;
+          }
+        } else {
+          console.error('[BioVault] Chain switch failed', switchError);
+          UI.showAlert('Failed to switch to Arbitrum One. Please switch manually in your wallet.');
+          return;
+        }
+      }
+    }
+
     vaultData.userWallet = account;
     UI.updateConnectedAccount();
     await Wallet.initContracts();
@@ -977,21 +1026,59 @@ const Wallet = {
     const btn = document.getElementById('connect-wallet');
     if (btn) { btn.textContent = 'Wallet Connected'; btn.disabled = true; }
   },
-
   connectWalletConnect: async () => {
     let WCProvider;
     try {
-      WCProvider = await import('https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.14.0/dist/esm/index.js');
+      WCProvider = await import('https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.21.8/dist/esm/index.js');
     } catch (e) {
       UI.showAlert('Could not load WalletConnect (offline or blocked). Try MetaMask.');
       return;
     }
-    const wcProvider = await WCProvider.EthereumProvider.init({ projectId: WALLET_CONNECT_PROJECT_ID, chains:[EXPECTED_CHAIN_ID], showQrModal:true });
+    const wcProvider = await WCProvider.EthereumProvider.init({
+      projectId: WALLET_CONNECT_PROJECT_ID,
+      chains: [EXPECTED_CHAIN_ID],
+      optionalChains: [1, 10, 137],
+      showQrModal: true
+    });
     await wcProvider.enable();
     provider = new ethers.BrowserProvider(wcProvider);
     signer = await provider.getSigner();
     account = await signer.getAddress();
-    chainId = await provider.getNetwork().then(function(net){ return net.chainId; });
+    chainId = (await provider.getNetwork()).chainId;
+
+    // Check and switch chain if not matching
+    if (Number(chainId) !== EXPECTED_CHAIN_ID) {
+      try {
+        await wcProvider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x' + EXPECTED_CHAIN_ID.toString(16) }]
+        });
+        chainId = (await provider.getNetwork()).chainId;
+      } catch (switchError) {
+        if (switchError.code === 4902) {
+          try {
+            await wcProvider.request({
+              method: 'wallet_addEthereumChain',
+              params: [ARBITRUM_ONE_PARAMS]
+            });
+            await wcProvider.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: '0x' + EXPECTED_CHAIN_ID.toString(16) }]
+            });
+            chainId = (await provider.getNetwork()).chainId;
+          } catch (addError) {
+            console.error('[BioVault] Chain add failed', addError);
+            UI.showAlert('Failed to add/switch to Arbitrum One. Please add it manually in your wallet.');
+            return;
+          }
+        } else {
+          console.error('[BioVault] Chain switch failed', switchError);
+          UI.showAlert('Failed to switch to Arbitrum One. Please switch manually in your wallet.');
+          return;
+        }
+      }
+    }
+
     vaultData.userWallet = account;
     UI.updateConnectedAccount();
     await Wallet.initContracts();
@@ -1000,7 +1087,6 @@ const Wallet = {
     const btn = document.getElementById('connect-wallet');
     if (btn) { btn.textContent = 'Wallet Connected'; btn.disabled = true; }
   },
-
   initContracts: async () => {
     try {
       if (Number(chainId) !== EXPECTED_CHAIN_ID) {
@@ -1009,16 +1095,13 @@ const Wallet = {
       }
       const tvmAddr = CONTRACT_ADDRESS.toLowerCase();
       const usdtAddr = USDT_ADDRESS.toLowerCase();
-
-      const tvmOk  = await contractExists(tvmAddr);
+      const tvmOk = await contractExists(tvmAddr);
       const usdtOk = await contractExists(usdtAddr);
-
       if (!tvmOk || !usdtOk) {
         UI.showAlert('Contract(s) not deployed on this network. Dashboard features disabled.');
         tvmContract = null; usdtContract = null; disableDashboardButtons(); return;
       }
-
-      tvmContract  = new ethers.Contract(tvmAddr, ABI, signer);
+      tvmContract = new ethers.Contract(tvmAddr, ABI, signer);
       usdtContract = new ethers.Contract(usdtAddr, [
         {"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
         {"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"spender","type":"address"}],"name":"allowance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
@@ -1030,32 +1113,26 @@ const Wallet = {
       tvmContract = null; usdtContract = null; disableDashboardButtons();
     }
   },
-
   updateBalances: async () => {
     try {
       if (!account || !provider) return;
       // placeholders
       var ub = document.getElementById('user-balance'); if (ub) ub.textContent = '— TVM';
       var uu = document.getElementById('usdt-balance'); if (uu) uu.textContent = '— USDT';
-
       const tvmOk = await contractExists(CONTRACT_ADDRESS.toLowerCase());
       const usdtOk = await contractExists(USDT_ADDRESS.toLowerCase());
       if (!tvmOk || !usdtOk || !tvmContract || !usdtContract) return;
-
       const tvmBal = await tvmContract.balanceOf(account);
       if (ub) ub.textContent = ethers.formatUnits(tvmBal, 18) + ' TVM';
-
       const usdtBal = await usdtContract.balanceOf(account);
       if (uu) uu.textContent = ethers.formatUnits(usdtBal, 6) + ' USDT';
-
-      var e3 = document.getElementById('tvm-price');    if (e3) e3.textContent  = '1.00 USDT';
-      var e4 = document.getElementById('pool-ratio');   if (e4) e4.textContent = '51% HI / 49% AI';
+      var e3 = document.getElementById('tvm-price'); if (e3) e3.textContent = '1.00 USDT';
+      var e4 = document.getElementById('pool-ratio'); if (e4) e4.textContent = '51% HI / 49% AI';
       var e5 = document.getElementById('avg-reserves'); if (e5) e5.textContent = '100M TVM';
     } catch (e) {
       console.warn('Balance refresh failed:', e);
     }
   },
-
   ensureAllowance: async (token, owner, spender, amount) => {
     if (!token || !token.allowance) return;
     const a = await token.allowance(owner, spender);
@@ -1064,10 +1141,9 @@ const Wallet = {
       await tx.wait();
     }
   },
-
   getOnchainBalances: async () => {
     if (!tvmContract || !usdtContract || !account) throw new Error('Connect wallet first.');
-    const tvm  = await tvmContract.balanceOf(account);
+    const tvm = await tvmContract.balanceOf(account);
     const usdt = await usdtContract.balanceOf(account);
     return { tvm: tvm, usdt: usdt };
   }
