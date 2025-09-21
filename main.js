@@ -2096,7 +2096,7 @@ async function init() {
       vaultData.joinTimestamp = Date.now();
       vaultData.deviceKeyHash = Utils.to0x(await Utils.sha256Hex(KEY_HASH_SALT + Utils.toB64(Utils.rand(32))));
       vaultData.balanceSHE = INITIAL_BALANCE_SHE;
-      vaultData.bonusConstant = currentBioConst;
+      vaultData.bonusConstant = bioConst;
       const salt = Utils.rand(16);
       const pin = prompt("Set passphrase:");
       derivedKey = await Vault.deriveKeyFromPIN(Utils.sanitizeInput(pin || ''), salt);
