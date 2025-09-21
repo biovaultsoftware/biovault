@@ -27,7 +27,7 @@ const CONTRACT_ADDRESS = '0xf15D7981dD2031cAe8Bb5f58513Ae38b3D7a2b34';
 const USDT_ADDRESS     = '0x81CdB7FCF129B35Cb36c0331Db9664381B9254c9';
 
 // expected network for your deployment (change if not mainnet)
-const EXPECTED_CHAIN_ID = 1;
+const EXPECTED_CHAIN_ID = 42161;
 
 const ABI = [
   { "inputs":[{ "components":[
