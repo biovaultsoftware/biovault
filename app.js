@@ -7,7 +7,7 @@ import { kbUpsertMessage, kbSearch } from './kb.js';
 const DB_NAME = 'bc_lightning_pwa';
 const DB_VER = 6; // bump when schema changes
 
-const DEFAULT_SIGNAL_PATH = 'signal/';
+const DEFAULT_SIGNAL_PATH = '/signal';
 const DEFAULT_SIGNAL_KEY = 'bc_signal_urls';
 
 const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302'] }];
@@ -186,16 +186,31 @@ async function listContacts(){
 
 async function ensureChannel(peerHid){
   const channelId = await deriveChannelId(identity.hid, peerHid);
-  const tx=db.transaction(['channels'],'readwrite');
-  const store=tx.objectStore('channels');
-  const existing = await reqDone(store.get(channelId));
+
+  // IMPORTANT: never keep an IndexedDB transaction open across an await
+  // (it may auto-close, causing TransactionInactiveError).
+  const tx1 = db.transaction(['channels'], 'readonly');
+  const store1 = tx1.objectStore('channels');
+  const existing = await reqDone(store1.get(channelId));
+  await txDone(tx1);
+
   if(!existing){
     await appendSTA(db, identity, 'channel.open', { channelId, peerHid });
-    store.put({ channelId, peerHid, lastPulledSeq: 0, lastAckedSeq: 0, createdAt: Date.now() });
+
+    const tx2 = db.transaction(['channels'], 'readwrite');
+    tx2.objectStore('channels').put({
+      channelId,
+      peerHid,
+      lastPulledSeq: 0,
+      lastAckedSeq: 0,
+      createdAt: Date.now()
+    });
+    await txDone(tx2);
   }
-  await txDone(tx);
+
   return channelId;
 }
+
 
 async function getOutboxItems(channelId, toHid, sinceSeq){
   const tx=db.transaction(['outbox'],'readonly');

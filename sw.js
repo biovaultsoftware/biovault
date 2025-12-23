@@ -1,4 +1,4 @@
-const VERSION = 'bc-lightning-v1';
+const VERSION = 'bc-lightning-v2';
 const STATIC_CACHE = `bc-static-${VERSION}`;
 
 const STATIC_ASSETS = [
