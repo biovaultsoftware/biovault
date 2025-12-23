@@ -1,16 +1,27 @@
 import { openDB, txDone, reqDone } from './idb.js';
-import { appendSTA, exportKeyJwk, importPubKeyJwk, randomHex, getChainHead, getChainLen, computeHID, deriveChannelId } from './state.js';
+import {
+  appendSTA, exportKeyJwk, randomHex, getChainHead, getChainLen,
+  computeHID, deriveChannelId
+} from './state.js';
 import { SignalClient } from './signal.js';
 import { P2PManager } from './p2p.js';
 import { kbIndexMessage, kbSearch } from './kb.js';
 
 const DB_NAME = 'bc_lightning_pwa';
-const DB_VER = 4;
+const DB_VER = 5; // bump because we’re fixing behavior
+
+// ✅ Set your Cloudflare Worker signaling endpoint here:
+const SIGNAL_WS = 'wss://holy-sun-8f7f.rr-shemodel.workers.dev/signal';
+
+// STUN default; optional TURN via window.__TURN = { urls:[...], username:'', credential:'' }
+const ICE_SERVERS = [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] }
+];
 
 let db;
 let identity; // { hik, hid, pubJwk, privateKey, ecdhPubJwk, ecdhPrivKey }
-let activePeer = null; // HID
-let activeChannel = null; // CH-...
+let activePeer = null;     // HID-...
+let activeChannel = null;  // CH-...
 
 const els = {
   mePill: document.getElementById('mePill'),
@@ -66,9 +77,10 @@ function esc(s){ return String(s).replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;
 
 async function initDB(){
   db = await openDB(DB_NAME, DB_VER, {
-    upgrade(db, oldV, newV){
+    upgrade(db){
       if(!db.objectStoreNames.contains('state_chain')) db.createObjectStore('state_chain', { keyPath:'seq' });
       if(!db.objectStoreNames.contains('sync_log')) db.createObjectStore('sync_log', { keyPath:'nonce' });
+
       if(!db.objectStoreNames.contains('messages')) {
         const s=db.createObjectStore('messages', { keyPath:'id' });
         s.createIndex('byChannelTs', ['channelId','ts']);
@@ -84,6 +96,7 @@ async function initDB(){
         s.createIndex('byChannelSeq', ['channelId','seqInChannel']);
         s.createIndex('byToChannel', ['toHid','channelId']);
       }
+
       if(!db.objectStoreNames.contains('presence')) db.createObjectStore('presence', { keyPath:'hid' });
       if(!db.objectStoreNames.contains('pokes')) db.createObjectStore('pokes', { keyPath:'id' });
     }
@@ -97,14 +110,18 @@ async function ensureIdentity(){
 
   const existing = await reqDone(keys.get('identity'));
   if(existing?.privateJwk && existing?.pubJwk){
-    const privateKey = await crypto.subtle.importKey('jwk', existing.privateJwk, { name:'ECDSA', namedCurve:'P-256' }, true, ['sign']);
+    const privateKey = await crypto.subtle.importKey(
+      'jwk', existing.privateJwk, { name:'ECDSA', namedCurve:'P-256' }, true, ['sign']
+    );
     const pubJwk = existing.pubJwk;
     const hid = existing.hid || await computeHID(pubJwk);
 
     let ecdhPrivKey=null, ecdhPubJwk=null;
     const ecdhRec = await reqDone(keys.get('ecdh'));
     if(ecdhRec?.privateJwk && ecdhRec?.pubJwk){
-      ecdhPrivKey = await crypto.subtle.importKey('jwk', ecdhRec.privateJwk, { name:'ECDH', namedCurve:'P-256' }, true, ['deriveKey']);
+      ecdhPrivKey = await crypto.subtle.importKey(
+        'jwk', ecdhRec.privateJwk, { name:'ECDH', namedCurve:'P-256' }, true, ['deriveKey']
+      );
       ecdhPubJwk = ecdhRec.pubJwk;
     } else {
       const kp = await crypto.subtle.generateKey({name:'ECDH', namedCurve:'P-256'}, true, ['deriveKey']);
@@ -137,96 +154,10 @@ async function ensureIdentity(){
   identity = { hik, hid, pubJwk, privateKey: kp.privateKey, ecdhPubJwk, ecdhPrivKey: kp2.privateKey };
 }
 
-function signalUrls(){
-  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  return [
-    proto + location.host + '/signal', // Cloudflare Worker endpoint recommended
-  ];
-}
-
-let signal, p2p;
-
-async function initNetwork(){
-  signal = new SignalClient(signalUrls(), {
-    hid: identity.hid,
-    onMessage: async (m) => {
-      const from = m.from;
-      const data = m.data || {};
-      if(data.kind === 'offer' || data.kind === 'answer' || data.kind === 'ice'){
-        await p2p.onSignal({from, data});
-        return;
-      }
-      if(data.kind === 'poke'){
-        // auto-sync from this contact if it's one of ours
-        await maybeSync(from);
-        return;
-      }
-      if(data.kind === 'presence'){
-        // cache presence
-        await putPresence(from, data.ts, data.ttl||120, data.hints||null);
-        return;
-      }
-    },
-    onStatus: (s) => {
-      const txt = s.state + (s.url ? ` (${s.url.replace(/^wss?:\/\//,'')})` : '');
-      els.signalStatus.textContent = txt;
-    }
-  });
-
-  const turn = (window.__TURN && window.__TURN.urls) ? [window.__TURN] : [];
-  const iceServers = ICE_SERVERS.concat(turn);
-  p2p = new P2PManager({
-    rtcOverride: { iceServers },
-    rtcConfig: { iceServers: ICE_SERVERS, iceCandidatePoolSize: 4 },
-    myHid: identity.hid,
-    signal,
-    ecdh: { publicJwk: identity.ecdhPubJwk, privateKey: identity.ecdhPrivKey },
-    onPullRequest: async ({from, channelId, sinceSeq}) => {
-      return { items: await getOutboxItems(channelId, from, sinceSeq) };
-    },
-    onIntentBatch: async ({from, channelId, items}) => {
-      let maxSeq = 0;
-      for(const it of items){
-        maxSeq = Math.max(maxSeq, Number(it.seq||0));
-        await appendSTA(db, identity, 'msg.delivered', {
-          channelId,
-          fromHid: from,
-          msgId: it.msgId,
-          seqInChannel: it.seq,
-          text: it.text
-        });
-      }
-      if(maxSeq>0){
-        await appendSTA(db, identity, 'msg.ack', { channelId, peerHid: from, upToSeq: maxSeq });
-        await p2p.sendAck(from, channelId, maxSeq);
-      }
-      await refreshChat();
-    },
-    onAck: async ({from, channelId, upToSeq}) => {
-      await markOutboxDelivered(channelId, from, upToSeq);
-      await refreshChat();
-    },
-    onStatus: (s) => {
-      els.p2pStatus.textContent = s.peerHid ? `${s.peerHid.slice(0,10)}… ${s.state}` : String(s.state||'');
-    }
-  });
-
-  signal.start();
-
-  // presence heartbeat to contacts (best-effort)
-  setInterval(async ()=>{
-    const cs = await listContacts();
-    if(cs.length && signal.isOpen()){
-      const payload = { kind:'presence', ts: Date.now(), ttl: 120, hints: null };
-      signal.broadcast(cs.map(x=>x.hid), payload);
-    }
-  }, 45000);
-}
-
-async function putPresence(hid, ts, ttl, hints){
-  const tx=db.transaction(['presence'], 'readwrite');
-  tx.objectStore('presence').put({ hid, ts, expiresAt: ts + ttl*1000, hints });
-  await txDone(tx);
+async function refreshMeta(){
+  els.head.textContent = await getChainHead(db);
+  els.len.textContent = await getChainLen(db);
+  els.mePill.textContent = `Me: ${identity.hid}`;
 }
 
 async function listContacts(){
@@ -244,50 +175,20 @@ async function ensureChannel(peerHid){
   const existing = await reqDone(store.get(channelId));
   if(!existing){
     await appendSTA(db, identity, 'channel.open', { channelId, peerHid });
-    store.put({ channelId, peerHid, lastPulledSeq: 0, lastAckedSeq: 0, createdAt: Date.now() });
+    store.put({ channelId, peerHid, lastPulledSeq: 0, createdAt: Date.now() });
   }
   await txDone(tx);
   return channelId;
 }
 
-async function getOutboxItems(channelId, toHid, sinceSeq){
-  const tx=db.transaction(['outbox'],'readonly');
-  const store=tx.objectStore('outbox');
-  const all = await reqDone(store.getAll());
+async function addContact(hid){
+  hid = String(hid||'').trim();
+  if(!hid.startsWith('HID-')) return toast('Invalid HID');
+  await appendSTA(db, identity, 'contact.add', { hid });
+  const tx=db.transaction(['contacts'],'readwrite');
+  tx.objectStore('contacts').put({ hid, nickname:null, addedAt: Date.now() });
   await txDone(tx);
-  return (all||[])
-    .filter(x => x.channelId===channelId && x.toHid===toHid && Number(x.seqInChannel)>Number(sinceSeq||0) && x.status!=='delivered')
-    .sort((a,b)=>a.seqInChannel-b.seqInChannel)
-    .slice(0,200)
-    .map(x => ({ seq: x.seqInChannel, msgId: x.id, text: x.text, ts: x.createdAt }));
-}
-
-async function nextSeq(channelId, toHid){
-  const tx=db.transaction(['outbox'],'readonly');
-  const store=tx.objectStore('outbox');
-  const all = await reqDone(store.getAll());
-  await txDone(tx);
-  const mx = (all||[]).filter(x=>x.channelId===channelId && x.toHid===toHid).reduce((m,x)=>Math.max(m, Number(x.seqInChannel||0)), 0);
-  return mx+1;
-}
-
-async function markOutboxDelivered(channelId, toHid, upToSeq){
-  const tx=db.transaction(['outbox'],'readwrite');
-  const store=tx.objectStore('outbox');
-  const all = await reqDone(store.getAll());
-  for(const x of (all||[])){
-    if(x.channelId===channelId && x.toHid===toHid && Number(x.seqInChannel)<=Number(upToSeq)){
-      x.status='delivered';
-      store.put(x);
-    }
-  }
-  await txDone(tx);
-}
-
-async function refreshMeta(){
-  els.head.textContent = await getChainHead(db);
-  els.len.textContent = await getChainLen(db);
-  els.mePill.textContent = `Me: ${identity.hid}`;
+  await renderContacts();
 }
 
 async function renderContacts(){
@@ -313,52 +214,63 @@ async function renderContacts(){
   }
 }
 
-async function refreshChat(){
-  if(!activeChannel){
-    els.chat.innerHTML = `<div class="meta">Pick a contact.</div>`;
-    return;
-  }
-  const tx=db.transaction(['messages','outbox'],'readonly');
-  const msgsStore=tx.objectStore('messages');
-  const outStore=tx.objectStore('outbox');
-  const msgs = await reqDone(msgsStore.getAll());
-  const outb = await reqDone(outStore.getAll());
+async function nextSeq(channelId, toHid){
+  const tx=db.transaction(['outbox'],'readonly');
+  const store=tx.objectStore('outbox');
+  const all = await reqDone(store.getAll());
   await txDone(tx);
-
-  const m = (msgs||[]).filter(x=>x.channelId===activeChannel).sort((a,b)=>a.ts-b.ts);
-  const o = (outb||[]).filter(x=>x.channelId===activeChannel && x.toHid===activePeer).sort((a,b)=>a.createdAt-b.createdAt);
-
-  // merge: show settled incoming + local outgoing pending/sent
-  const bubbles = [];
-  for(const x of m){
-    const me = x.dir==='out';
-    bubbles.push({me, text:x.text, ts:x.ts, meta: me ? 'delivered' : 'received'});
-  }
-  for(const x of o){
-    bubbles.push({me:true, text:x.text, ts:x.createdAt, meta: x.status});
-  }
-  bubbles.sort((a,b)=>a.ts-b.ts);
-
-  els.chat.innerHTML = bubbles.map(b=>`
-    <div class="bubble ${b.me?'me':''}">
-      ${esc(b.text)}
-      <div class="meta">${esc(new Date(b.ts).toLocaleString())} • ${esc(b.meta)}</div>
-    </div>
-  `).join('') || `<div class="meta">No messages yet.</div>`;
-
-  els.chat.scrollTop = els.chat.scrollHeight;
+  const mx = (all||[])
+    .filter(x=>x.channelId===channelId && x.toHid===toHid)
+    .reduce((m,x)=>Math.max(m, Number(x.seqInChannel||0)), 0);
+  return mx + 1;
 }
 
-async function maybeSync(peerHid){
-  if(!peerHid) return;
+// ✅ ACTUAL local commit (this was missing)
+async function createIntentForPeer(peerHid, text){
   const channelId = await ensureChannel(peerHid);
-  // dial + pull
-  try{
-    if(!p2p.isConnected(peerHid)) await p2p.dial(peerHid);
-  }catch{}
-  const since = await getLastPulled(channelId);
-  await p2p.sendPull(peerHid, channelId, since);
-  await setLastPulled(channelId, since); // will be bumped by ack later
+  const seqInChannel = await nextSeq(channelId, peerHid);
+  const id = `OUT:${channelId}:${peerHid}:${seqInChannel}:${randomHex(6)}`;
+
+  await appendSTA(db, identity, 'msg.intent', { channelId, toHid: peerHid, seqInChannel, text });
+
+  const tx=db.transaction(['outbox'],'readwrite');
+  tx.objectStore('outbox').put({
+    id,
+    channelId,
+    toHid: peerHid,
+    seqInChannel,
+    text,
+    status: 'pending',
+    createdAt: Date.now()
+  });
+  await txDone(tx);
+
+  return { id, channelId, seq: seqInChannel, nonce: id.split(':').pop() };
+}
+
+async function getOutboxItems(channelId, toHid, sinceSeq){
+  const tx=db.transaction(['outbox'],'readonly');
+  const store=tx.objectStore('outbox');
+  const all = await reqDone(store.getAll());
+  await txDone(tx);
+  return (all||[])
+    .filter(x => x.channelId===channelId && x.toHid===toHid && Number(x.seqInChannel)>Number(sinceSeq||0) && x.status!=='delivered')
+    .sort((a,b)=>a.seqInChannel-b.seqInChannel)
+    .slice(0,200)
+    .map(x => ({ seq: x.seqInChannel, msgId: x.id, text: x.text, ts: x.createdAt }));
+}
+
+async function markOutboxDelivered(channelId, toHid, upToSeq){
+  const tx=db.transaction(['outbox'],'readwrite');
+  const store=tx.objectStore('outbox');
+  const all = await reqDone(store.getAll());
+  for(const x of (all||[])){
+    if(x.channelId===channelId && x.toHid===toHid && Number(x.seqInChannel)<=Number(upToSeq)){
+      x.status='delivered';
+      store.put(x);
+    }
+  }
+  await txDone(tx);
 }
 
 async function getLastPulled(channelId){
@@ -380,66 +292,185 @@ async function setLastPulled(channelId, v){
   await txDone(tx);
 }
 
-async function addContact(hid){
-  hid = String(hid||'').trim();
-  if(!hid.startsWith('HID-')) return;
-  await appendSTA(db, identity, 'contact.add', { hid });
-  const tx=db.transaction(['contacts'],'readwrite');
-  tx.objectStore('contacts').put({ hid, nickname:null, addedAt: Date.now() });
+// ✅ Fix: actually store delivered incoming messages
+async function storeIncomingMessage({ channelId, fromHid, seqInChannel, text, ts }){
+  const tx=db.transaction(['messages'], 'readwrite');
+  tx.objectStore('messages').put({
+    id: `IN:${channelId}:${fromHid}:${seqInChannel}`,
+    channelId,
+    dir: 'in',
+    peerHid: fromHid,
+    seqInChannel,
+    text,
+    ts: ts || Date.now()
+  });
   await txDone(tx);
-  await renderContacts();
+  try { await kbIndexMessage(db, { peerHid: fromHid, ts: ts || Date.now(), text }); } catch {}
 }
 
-async function sendMessage() {
-  const text = (els.msg.value || '').trim();
-  if (!text) return;
+async function refreshChat(){
+  if(!activeChannel){
+    els.chat.innerHTML = `<div class="meta">Pick a contact.</div>`;
+    return;
+  }
+  const tx=db.transaction(['messages','outbox'],'readonly');
+  const msgsStore=tx.objectStore('messages');
+  const outStore=tx.objectStore('outbox');
+  const msgs = await reqDone(msgsStore.getAll());
+  const outb = await reqDone(outStore.getAll());
+  await txDone(tx);
 
-  if (!currentPeer) {
+  const m = (msgs||[]).filter(x=>x.channelId===activeChannel).sort((a,b)=>a.ts-b.ts);
+  const o = (outb||[]).filter(x=>x.channelId===activeChannel && x.toHid===activePeer).sort((a,b)=>a.createdAt-b.createdAt);
+
+  const bubbles = [];
+  for(const x of m){
+    bubbles.push({me:false, text:x.text, ts:x.ts, meta:'received'});
+  }
+  for(const x of o){
+    bubbles.push({me:true, text:x.text, ts:x.createdAt, meta:x.status});
+  }
+  bubbles.sort((a,b)=>a.ts-b.ts);
+
+  els.chat.innerHTML = bubbles.map(b=>`
+    <div class="bubble ${b.me?'me':''}">
+      ${esc(b.text)}
+      <div class="meta">${esc(new Date(b.ts).toLocaleString())} • ${esc(b.meta)}</div>
+    </div>
+  `).join('') || `<div class="meta">No messages yet.</div>`;
+
+  els.chat.scrollTop = els.chat.scrollHeight;
+}
+
+let signal, p2p;
+
+function signalUrls(){
+  // Always prefer explicit Worker endpoint
+  return [SIGNAL_WS];
+}
+
+async function maybeSync(peerHid){
+  if(!peerHid) return;
+  const channelId = await ensureChannel(peerHid);
+
+  if(!signal?.isOpen?.()) {
+    toast('Saved locally (pending). Signaling offline.');
+    return;
+  }
+
+  try{
+    if(!p2p.isConnected(peerHid)) await p2p.dial(peerHid);
+  }catch{}
+
+  const since = await getLastPulled(channelId);
+  await p2p.sendPull(peerHid, channelId, since);
+  // ✅ do NOT bump lastPulled here; bump when we actually receive (below)
+}
+
+async function initNetwork(){
+  signal = new SignalClient(signalUrls(), {
+    hid: identity.hid,
+    onMessage: async (m) => {
+      const from = m.from;
+      const data = m.data || {};
+      if(data.kind === 'offer' || data.kind === 'answer' || data.kind === 'ice'){
+        await p2p.onSignal({from, data});
+        return;
+      }
+      if(data.kind === 'poke'){
+        await maybeSync(from);
+        return;
+      }
+    },
+    onStatus: (s) => {
+      const txt = s.state + (s.url ? ` (${s.url.replace(/^wss?:\/\//,'')})` : '');
+      els.signalStatus.textContent = txt;
+    }
+  });
+
+  const turn = (window.__TURN && window.__TURN.urls) ? [window.__TURN] : [];
+  const iceServers = ICE_SERVERS.concat(turn);
+
+  p2p = new P2PManager({
+    rtcOverride: { iceServers },
+    myHid: identity.hid,
+    signal,
+    ecdh: { publicJwk: identity.ecdhPubJwk, privateKey: identity.ecdhPrivKey },
+
+    onPullRequest: async ({from, channelId, sinceSeq}) => {
+      return { items: await getOutboxItems(channelId, from, sinceSeq) };
+    },
+
+    onIntentBatch: async ({from, channelId, items}) => {
+      let maxSeq = 0;
+      for(const it of items){
+        maxSeq = Math.max(maxSeq, Number(it.seq||0));
+
+        await appendSTA(db, identity, 'msg.delivered', {
+          channelId, fromHid: from, msgId: it.msgId, seqInChannel: it.seq, text: it.text
+        });
+
+        // ✅ store in messages so UI shows it
+        await storeIncomingMessage({
+          channelId,
+          fromHid: from,
+          seqInChannel: Number(it.seq||0),
+          text: it.text,
+          ts: it.ts || Date.now()
+        });
+      }
+
+      if(maxSeq > 0){
+        // ✅ bump lastPulled to what we actually got
+        await setLastPulled(channelId, maxSeq);
+
+        await appendSTA(db, identity, 'msg.ack', { channelId, peerHid: from, upToSeq: maxSeq });
+        await p2p.sendAck(from, channelId, maxSeq);
+      }
+
+      await refreshChat();
+    },
+
+    onAck: async ({from, channelId, upToSeq}) => {
+      await markOutboxDelivered(channelId, from, upToSeq);
+      await refreshChat();
+    },
+
+    onStatus: (s) => {
+      els.p2pStatus.textContent = s.peerHid ? `${s.peerHid.slice(0,10)}… ${s.state}` : String(s.state||'');
+    }
+  });
+
+  signal.start();
+}
+
+async function sendMessage(){
+  const text = (els.msg.value || '').trim();
+  if(!text) return;
+
+  if(!activePeer){
     toast('Select a contact first.');
     return;
   }
 
   els.msg.value = '';
 
-  // 1) Always commit intent locally (Lightning semantics).
-  // If signaling/P2P is offline, the intent stays in outbox and will deliver when receiver pulls later.
-  let intent;
-  try {
-    intent = await createIntentForPeer(currentPeer, text);
+  // ✅ Always commit locally
+  const intent = await createIntentForPeer(activePeer, text);
 
-    // Render pending bubble immediately
-    const b = document.createElement('div');
-    b.className = 'bubble me';
-    b.textContent = text;
-    b.dataset.pending = '1';
-    els.chat.appendChild(b);
-    els.chat.scrollTop = els.chat.scrollHeight;
+  // Render bubble immediately
+  const b = document.createElement('div');
+  b.className = 'bubble me';
+  b.textContent = text;
+  els.chat.appendChild(b);
+  els.chat.scrollTop = els.chat.scrollHeight;
 
-    // Offline brain index
-    try {
-      await kbUpsertMessage(db, { id: `${intent.seq}:${intent.nonce}`, peerHid: currentPeer, dir: 'out', ts: Date.now(), text });
-    } catch {}
-  } catch (e) {
-    console.error(e);
-    toast('Failed to commit message locally.');
-    return;
-  }
+  try { await kbIndexMessage(db, { peerHid: activePeer, ts: Date.now(), text }); } catch {}
 
   await refreshMeta();
 
-  // 2) Poke receiver (no content). If push server exists, request a poke.
-  try { await sendPoke(currentPeer); } catch {}
-
-  // 3) If signaling is up, try to sync now; otherwise keep pending.
-  try {
-    if (signal?.isConnected?.()) {
-      await maybeSync();
-    } else {
-      toast('Saved locally (pending). Signaling offline.');
-    }
-  } catch (e) {
-    toast('Saved locally (pending).');
-  }
+  // Best-effort sync
+  try { await maybeSync(activePeer); } catch {}
 }
 
 async function exportAll(){
@@ -466,7 +497,6 @@ async function importAll(){
     const text=await file.text();
     const parsed=JSON.parse(text);
     const dump=parsed.dump||{};
-    // clear & restore
     const stores=[...db.objectStoreNames];
     const tx=db.transaction(stores,'readwrite');
     for(const s of stores) tx.objectStore(s).clear();
@@ -483,7 +513,7 @@ async function importAll(){
 
 async function hardReset(){
   db.close();
-  await new Promise((res, rej)=>{
+  await new Promise((res)=>{
     const req=indexedDB.deleteDatabase(DB_NAME);
     req.onsuccess=()=>res();
     req.onerror=()=>res();
@@ -495,67 +525,31 @@ async function hardReset(){
 // ---- UI wiring ----
 els.btnAdd.onclick = ()=> addContact(els.peerHid.value);
 els.send.onclick = ()=> sendMessage();
-els.btnSync.onclick = ()=> { if(activePeer) maybeSync(activePeer); };
+els.btnSync.onclick = ()=> {
+  if(!activePeer) return toast('Select a contact first.');
+  return maybeSync(activePeer);
+};
 els.btnExport.onclick = ()=> exportAll();
 els.btnImport.onclick = ()=> importAll();
 els.btnReset.onclick = ()=> hardReset();
 
 window.addEventListener('keydown', (e)=>{
   if(e.key==='Enter' && document.activeElement===els.msg){
-    e.preventDefault(); sendMessage();
+    e.preventDefault();
+    sendMessage();
   }
 });
 
 // ---- boot ----
-async function initPushPoke() {
-  // Web Push is used ONLY for "poke" notifications (no message content).
-  // Requires HTTPS + deployed /push/register endpoint with VAPID public key.
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-  try {
-    const reg = await navigator.serviceWorker.ready;
-    // fetch VAPID public key from your domain (Cloudflare worker)
-    const r = await fetch('./push/vapidPublicKey', { cache:'no-store' });
-    if (!r.ok) return;
-    const { publicKey } = await r.json();
-    if (!publicKey) return;
-
-    // Convert base64url to Uint8Array
-    const key = Uint8Array.from(atob(publicKey.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
-    let sub = await reg.pushManager.getSubscription();
-    if (!sub) {
-      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-    }
-    // register subscription for my HID
-    await fetch('./push/register', {
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body: JSON.stringify({ hid: myHID, sub })
-    });
-  } catch (e) {
-    console.warn('push init failed', e);
-  }
-}
-
-async function sendPoke(toHid, channelId) {
-  // Best-effort: server will send a push notification to receiver if they registered.
-  try {
-    await fetch('./push/poke', {
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body: JSON.stringify({ from: myHID, to: toHid, channelId })
-    });
-  } catch {}
-}
-
 (async function main(){
   await initDB();
   await ensureIdentity();
   await refreshMeta();
   await renderContacts();
-  await initNetwork();
 
-  // register SW if available
   if('serviceWorker' in navigator){
     try{ await navigator.serviceWorker.register('./sw.js'); }catch{}
   }
+
+  await initNetwork();
 })();
