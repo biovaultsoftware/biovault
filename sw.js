@@ -1,4 +1,4 @@
-const VERSION = 'bc-lightning-v1';
+const VERSION = 'bc-pwa-v6';
 const STATIC_CACHE = `bc-static-${VERSION}`;
 const BACKUP_CACHE = 'bc-backup';
 const BACKUP_URL = '/__bc_backup.json';
@@ -11,6 +11,7 @@ const STATIC_ASSETS = [
   './state.js',
   './signal.js',
   './p2p.js',
+  './kb.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png'
@@ -87,4 +88,26 @@ self.addEventListener('fetch', (event) => {
       return cached || Response.error();
     }
   })());
+});
+
+
+// Push = poke-only (no message content)
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch {}
+  const title = data.title || 'New message';
+  const body = data.body || 'Open to receive.';
+  event.waitUntil(self.registration.showNotification(title, {
+    body,
+    tag: 'bc-poke',
+    data
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    for (const c of list) { if ('focus' in c) return c.focus(); }
+    return clients.openWindow('./');
+  }));
 });

@@ -1,3 +1,8 @@
+function makeRtcCfg(override){
+  if (override && override.iceServers) return { iceServers: override.iceServers };
+  return RTC_CFG;
+}
+
 const RTC_CFG = {
   iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
   iceCandidatePoolSize: 4,
@@ -79,7 +84,7 @@ export class P2PManager {
     let s=this.peers.get(peerHid);
     if(s) return s;
 
-    const pc=new RTCPeerConnection(RTC_CFG);
+    const pc=new RTCPeerConnection(makeRtcCfg(this.rtcOverride));
     s={peerHid, pc, dc:null, initiator, sharedKey:null, peerPubJwk:null};
     this.peers.set(peerHid,s);
     this.onStatus({peerHid, state:"created"});

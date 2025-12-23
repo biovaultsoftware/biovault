@@ -2,9 +2,10 @@ import { openDB, txDone, reqDone } from './idb.js';
 import { appendSTA, exportKeyJwk, importPubKeyJwk, randomHex, getChainHead, getChainLen, computeHID, deriveChannelId } from './state.js';
 import { SignalClient } from './signal.js';
 import { P2PManager } from './p2p.js';
+import { kbIndexMessage, kbSearch } from './kb.js';
 
 const DB_NAME = 'bc_lightning_pwa';
-const DB_VER = 3;
+const DB_VER = 4;
 
 let db;
 let identity; // { hik, hid, pubJwk, privateKey, ecdhPubJwk, ecdhPrivKey }
@@ -21,6 +22,9 @@ const els = {
   btnAdd: document.getElementById('btnAdd'),
   contacts: document.getElementById('contacts'),
   chatTitle: document.getElementById('chatTitle'),
+  brainQuery: document.getElementById('brainQuery'),
+  brainAsk: document.getElementById('brainAsk'),
+  brainAnswer: document.getElementById('brainAnswer'),
   chat: document.getElementById('chat'),
   msg: document.getElementById('msg'),
   send: document.getElementById('send'),
@@ -29,6 +33,34 @@ const els = {
   btnImport: document.getElementById('btnImport'),
   btnReset: document.getElementById('btnReset'),
 };
+
+function toast(msg){
+  try{
+    let t=document.getElementById('toast');
+    if(!t){
+      t=document.createElement('div');
+      t.id='toast';
+      t.style.position='fixed';
+      t.style.left='50%';
+      t.style.bottom='18px';
+      t.style.transform='translateX(-50%)';
+      t.style.padding='10px 14px';
+      t.style.borderRadius='14px';
+      t.style.background='rgba(0,0,0,.6)';
+      t.style.border='1px solid rgba(255,255,255,.15)';
+      t.style.color='white';
+      t.style.fontWeight='700';
+      t.style.zIndex='9999';
+      t.style.maxWidth='86vw';
+      t.style.textAlign='center';
+      document.body.appendChild(t);
+    }
+    t.textContent=msg;
+    t.style.opacity='1';
+    clearTimeout(t._h);
+    t._h=setTimeout(()=>{t.style.opacity='0';},1800);
+  }catch{}
+}
 
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 
@@ -141,7 +173,11 @@ async function initNetwork(){
     }
   });
 
+  const turn = (window.__TURN && window.__TURN.urls) ? [window.__TURN] : [];
+  const iceServers = ICE_SERVERS.concat(turn);
   p2p = new P2PManager({
+    rtcOverride: { iceServers },
+    rtcConfig: { iceServers: ICE_SERVERS, iceCandidatePoolSize: 4 },
     myHid: identity.hid,
     signal,
     ecdh: { publicJwk: identity.ecdhPubJwk, privateKey: identity.ecdhPrivKey },
@@ -354,26 +390,56 @@ async function addContact(hid){
   await renderContacts();
 }
 
-async function sendMessage(){
-  if(!activePeer || !activeChannel) return;
-  const text = String(els.msg.value||'').trim();
-  if(!text) return;
-  els.msg.value='';
+async function sendMessage() {
+  const text = (els.msg.value || '').trim();
+  if (!text) return;
 
-  const msgId = 'MSG-' + randomHex(10);
-  const seqInChannel = await nextSeq(activeChannel, activePeer);
-
-  // commit intent locally (sender-held)
-  await appendSTA(db, identity, 'msg.intent', { channelId: activeChannel, toHid: activePeer, msgId, seqInChannel, text });
-  // local echo
-  await appendSTA(db, identity, 'msg.sent', { channelId: activeChannel, toHid: activePeer, msgId, seqInChannel, text });
-
-  // poke receiver (no content)
-  if(signal.isOpen()){
-    signal.send(activePeer, { kind:'poke', channelId: activeChannel, ts: Date.now(), ttl: 300 });
+  if (!currentPeer) {
+    toast('Select a contact first.');
+    return;
   }
 
-  await refreshChat();
+  els.msg.value = '';
+
+  // 1) Always commit intent locally (Lightning semantics).
+  // If signaling/P2P is offline, the intent stays in outbox and will deliver when receiver pulls later.
+  let intent;
+  try {
+    intent = await createIntentForPeer(currentPeer, text);
+
+    // Render pending bubble immediately
+    const b = document.createElement('div');
+    b.className = 'bubble me';
+    b.textContent = text;
+    b.dataset.pending = '1';
+    els.chat.appendChild(b);
+    els.chat.scrollTop = els.chat.scrollHeight;
+
+    // Offline brain index
+    try {
+      await kbUpsertMessage(db, { id: `${intent.seq}:${intent.nonce}`, peerHid: currentPeer, dir: 'out', ts: Date.now(), text });
+    } catch {}
+  } catch (e) {
+    console.error(e);
+    toast('Failed to commit message locally.');
+    return;
+  }
+
+  await refreshMeta();
+
+  // 2) Poke receiver (no content). If push server exists, request a poke.
+  try { await sendPoke(currentPeer); } catch {}
+
+  // 3) If signaling is up, try to sync now; otherwise keep pending.
+  try {
+    if (signal?.isConnected?.()) {
+      await maybeSync();
+    } else {
+      toast('Saved locally (pending). Signaling offline.');
+    }
+  } catch (e) {
+    toast('Saved locally (pending).');
+  }
 }
 
 async function exportAll(){
@@ -441,6 +507,46 @@ window.addEventListener('keydown', (e)=>{
 });
 
 // ---- boot ----
+async function initPushPoke() {
+  // Web Push is used ONLY for "poke" notifications (no message content).
+  // Requires HTTPS + deployed /push/register endpoint with VAPID public key.
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    // fetch VAPID public key from your domain (Cloudflare worker)
+    const r = await fetch('./push/vapidPublicKey', { cache:'no-store' });
+    if (!r.ok) return;
+    const { publicKey } = await r.json();
+    if (!publicKey) return;
+
+    // Convert base64url to Uint8Array
+    const key = Uint8Array.from(atob(publicKey.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    }
+    // register subscription for my HID
+    await fetch('./push/register', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({ hid: myHID, sub })
+    });
+  } catch (e) {
+    console.warn('push init failed', e);
+  }
+}
+
+async function sendPoke(toHid, channelId) {
+  // Best-effort: server will send a push notification to receiver if they registered.
+  try {
+    await fetch('./push/poke', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({ from: myHID, to: toHid, channelId })
+    });
+  } catch {}
+}
+
 (async function main(){
   await initDB();
   await ensureIdentity();
