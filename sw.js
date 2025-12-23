@@ -1,7 +1,5 @@
-const VERSION = 'bc-pwa-v6';
+const VERSION = 'bc-lightning-v1';
 const STATIC_CACHE = `bc-static-${VERSION}`;
-const BACKUP_CACHE = 'bc-backup';
-const BACKUP_URL = '/__bc_backup.json';
 
 const STATIC_ASSETS = [
   './',
@@ -33,44 +31,15 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
-self.addEventListener('message', (event) => {
-  const msg = event.data || {};
-  if (msg.type === 'SAVE_BACKUP') {
-    event.waitUntil((async () => {
-      const cache = await caches.open(BACKUP_CACHE);
-      const body = JSON.stringify({ savedAt: Date.now(), data: msg.payload });
-      await cache.put(BACKUP_URL, new Response(body, { headers: { 'Content-Type': 'application/json' } }));
-      event.source?.postMessage?.({ type: 'BACKUP_SAVED', ok: true });
-    })());
-  }
-  if (msg.type === 'CLEAR_BACKUP') {
-    event.waitUntil((async () => {
-      const cache = await caches.open(BACKUP_CACHE);
-      await cache.delete(BACKUP_URL);
-      event.source?.postMessage?.({ type:'BACKUP_CLEARED', ok:true });
-    })());
-  }
-});
-
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-
-  if (url.pathname.endsWith('/__bc_backup.json')) {
-    event.respondWith((async () => {
-      const cache = await caches.open(BACKUP_CACHE);
-      const hit = await cache.match(BACKUP_URL);
-      return hit || new Response(JSON.stringify({ ok:false, reason:'no_backup' }), { headers:{'Content-Type':'application/json'}, status:404 });
-    })());
-    return;
-  }
 
   if (event.request.mode === 'navigate') {
     event.respondWith((async () => {
       const cache = await caches.open(STATIC_CACHE);
       const cached = await cache.match('./index.html');
       try {
-        const net = await fetch(event.request);
-        return net;
+        return await fetch(event.request);
       } catch {
         return cached;
       }
@@ -88,26 +57,4 @@ self.addEventListener('fetch', (event) => {
       return cached || Response.error();
     }
   })());
-});
-
-
-// Push = poke-only (no message content)
-self.addEventListener('push', (event) => {
-  let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch {}
-  const title = data.title || 'New message';
-  const body = data.body || 'Open to receive.';
-  event.waitUntil(self.registration.showNotification(title, {
-    body,
-    tag: 'bc-poke',
-    data
-  }));
-});
-
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-    for (const c of list) { if ('focus' in c) return c.focus(); }
-    return clients.openWindow('./');
-  }));
 });

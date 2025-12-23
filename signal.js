@@ -52,3 +52,7 @@ export class SignalClient {
     return ok;
   }
 }
+
+
+// Back-compat alias
+SignalClient.prototype.isConnected = function(){ return this.isOpen(); };

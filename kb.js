@@ -185,3 +185,9 @@ export async function kbRebuildFromMessages(db){
     });
   }
 }
+
+
+// Back-compat alias (older app.js expected this name)
+export async function kbIndexMessage(db, doc){
+  return kbUpsertMessage(db, doc);
+}
