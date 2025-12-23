@@ -7,7 +7,7 @@ import { kbUpsertMessage, kbSearch } from './kb.js';
 const DB_NAME = 'bc_lightning_pwa';
 const DB_VER = 6; // bump when schema changes
 
-const DEFAULT_SIGNAL_PATH = '/signal';
+const DEFAULT_SIGNAL_PATH = '';
 const DEFAULT_SIGNAL_KEY = 'bc_signal_urls';
 
 const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302'] }];
