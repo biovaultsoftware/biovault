@@ -1,0 +1,331 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BalanceChain Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../../shared-ui.css">
+  <style>
+    body{font-family:var(--app-font-sans);margin:24px;background:var(--app-body-bg);color:var(--app-ink)}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    textarea,input,button{padding:10px 12px;font-size:14px;border:1px solid var(--app-border);border-radius:12px;background:var(--app-panel-2);color:var(--app-ink)}
+    textarea{width:780px;max-width:100%;height:88px}
+    table{width:100%;border-collapse:collapse;margin-top:16px}
+    th,td{border-bottom:1px solid var(--app-border);padding:10px;text-align:left;vertical-align:top}
+    th{background:rgba(255,255,255,.04)}
+    .muted{color:var(--app-muted)}
+    .card{border:1px solid var(--app-border);border-radius:16px;padding:14px;margin-top:14px;background:var(--app-panel);box-shadow:var(--app-shadow)}
+    .mono{font-family:var(--app-font-mono)}
+    .bad{color:var(--app-bad);font-weight:600}
+    .ok{color:var(--app-good);font-weight:600}
+    details{margin-top:10px}
+  </style>
+</head>
+<body>
+  <h1>BalanceChain Explorer (State)</h1>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <div class="muted" style="margin-bottom:6px">Node endpoints (one per line). First node is the "primary" view; others are used to cross-check.</div>
+        <textarea id="nodes" placeholder="https://node1.workers.dev
+https://node2.workers.dev
+https://node3.workers.dev"></textarea>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="load">Load dashboard</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <div id="health" style="margin-top:12px"></div>
+  </div>
+
+  <div id="global" class="card"></div>
+
+  <div class="card">
+    <h2 style="margin:0 0 10px 0">Serial Lookup</h2>
+    <div class="row">
+      <input id="serialOrigin" style="min-width:360px" placeholder="origin_account_id" />
+      <input id="serialNo" style="width:160px" placeholder="segment_no" />
+      <button id="serialBtn">Lookup</button>
+      <span class="muted">Looks up (origin, segment_no) across all nodes</span>
+    </div>
+    <div id="serialOut" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin:0 0 10px 0">Account Summary</h2>
+    <div class="row">
+      <input id="accountSearch" style="min-width:360px" placeholder="account_id" />
+      <button id="viewAccount">View</button>
+      <span class="muted">Shows summary across all nodes</span>
+    </div>
+    <div id="account" style="margin-top:12px"></div>
+  </div>
+
+  <h2 style="margin-top:22px">Accounts (cross-node compare)</h2>
+  <div class="row">
+    <button id="prev">Prev</button>
+    <button id="next">Next</button>
+    <span class="muted">cursor: <span id="cursor">0</span> | limit: <span id="limit">50</span></span>
+  </div>
+
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th>account_id</th>
+        <th>primary unlocked</th>
+        <th>primary allowed</th>
+        <th>primary remaining</th>
+        <th>mismatches vs other nodes</th>
+        <th>reclaim_nonce</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+<script>
+let cursor = 0;
+let limit = 50;
+
+const $ = (id)=>document.getElementById(id);
+
+function fmtMs(ms){
+  if(ms===null || ms===undefined || ms==="") return "";
+  try { return new Date(Number(ms)).toISOString(); } catch { return String(ms); }
+}
+
+function normNode(u){
+  return u.trim().replace(/\/+$/,'');
+}
+
+function getNodes(){
+  const lines = ($('nodes').value || '').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  // de-dup
+  return [...new Set(lines.map(normNode))];
+}
+
+async function api(node, path){
+  const u = node + path;
+  const r = await fetch(u);
+  let j;
+  try { j = await r.json(); } catch { throw new Error(`Non-JSON from ${u}`); }
+  if(!j.ok) throw new Error(j.error || `API error from ${u}`);
+  return j;
+}
+
+async function safeApi(node, path){
+  try {
+    const j = await api(node, path);
+    return { ok:true, data:j };
+  } catch (e) {
+    return { ok:false, error:String(e.message||e) };
+  }
+}
+
+function renderHealth(health){
+  const el = $('health');
+  if(health.length===0){ el.innerHTML = '<div class="muted">Add at least 1 node endpoint.</div>'; return; }
+  const rows = health.map(h=>{
+    const st = h.ok ? `<span class="ok">OK</span>` : `<span class="bad">DOWN</span>`;
+    const meta = h.ok ? `<span class="muted">genesis ${fmtMs(h.data.genesis_utc_ms)} | chain ${h.data.chain_id}</span>` : `<span class="muted">${h.error}</span>`;
+    return `<div class="mono">${st} ${h.node} <span style="margin-left:8px">${meta}</span></div>`;
+  }).join('');
+  el.innerHTML = `<details open><summary><b>Node health</b></summary><div style="margin-top:10px">${rows}</div></details>`;
+}
+
+function mismatchCount(primaryRow, others){
+  // Compare only core explorer fields
+  const keys = ['unlocked_segments_count','expected_allowed_to_date','remaining','reclaim_nonce'];
+  let mism = 0;
+  for(const o of others){
+    if(!o) continue;
+    for(const k of keys){
+      if(primaryRow[k] !== o[k]) { mism++; break; }
+    }
+  }
+  return mism;
+}
+
+async function loadDashboard(){
+  const nodes = getNodes();
+  $('status').textContent = 'Loading...';
+
+  const health = await Promise.all(nodes.map(async (n)=>{
+    const r = await safeApi(n, '/v1/node/info');
+    if(r.ok) return { node:n, ok:true, data:r.data };
+    return { node:n, ok:false, error:r.error };
+  }));
+  renderHealth(health);
+
+  if(nodes.length===0){ $('status').textContent=''; return; }
+
+  // Global stats from all nodes
+  const stats = await Promise.all(nodes.map(async (n)=>({ node:n, ...(await safeApi(n, '/v1/explorer/stats')) })));
+
+  const primary = stats[0];
+  if(!primary.ok){
+    $('global').innerHTML = `<div class="bad">Primary node is down: ${primary.error}</div>`;
+    $('status').textContent='';
+    return;
+  }
+
+  const otherStats = stats.slice(1).filter(s=>s.ok).map(s=>s.data);
+  const mism = otherStats.filter(s=>
+    s.total_accounts !== primary.data.total_accounts ||
+    s.total_segments !== primary.data.total_segments ||
+    s.genesis_utc_ms !== primary.data.genesis_utc_ms
+  ).length;
+
+  $('global').innerHTML = `
+    <div><b>Primary node:</b> <span class="mono">${primary.node}</span></div>
+    <div><b>chain_id:</b> <span class="mono">${primary.data.chain_id}</span></div>
+    <div><b>genesis_utc:</b> <span class="mono">${fmtMs(primary.data.genesis_utc_ms)}</span></div>
+    <div><b>accounts:</b> ${primary.data.total_accounts} ${mism?`<span class="bad">(mismatch on ${mism} other nodes)</span>`:''}</div>
+    <div><b>segments:</b> ${primary.data.total_segments}</div>
+    <div class="muted">now: ${fmtMs(primary.data.now_ms)} | caps: initial ${primary.data.initial_unlocked}, yearly ${primary.data.yearly_cap}</div>
+  `;
+
+  cursor = 0;
+  await loadAccounts();
+  $('status').textContent = 'OK';
+}
+
+async function loadAccounts(){
+  const nodes = getNodes();
+  if(nodes.length===0) return;
+  $('cursor').textContent = String(cursor);
+  $('limit').textContent = String(limit);
+
+  // Fetch page from all nodes
+  const page = await Promise.all(nodes.map(async (n)=>({ node:n, ...(await safeApi(n, `/v1/explorer/accounts?limit=${limit}&cursor=${cursor}`)) })));
+  const primary = page[0];
+  const tbody = $('tbl').querySelector('tbody');
+  tbody.innerHTML = '';
+
+  if(!primary.ok){
+    tbody.innerHTML = `<tr><td colspan="6" class="bad">Primary node error: ${primary.error}</td></tr>`;
+    return;
+  }
+
+  // Build maps for other nodes by account_id
+  const maps = page.slice(1).map(p=>{
+    if(!p.ok) return null;
+    const m = new Map();
+    for(const a of p.data.accounts){ m.set(a.account_id, a); }
+    return m;
+  });
+
+  for(const a of primary.data.accounts){
+    const others = maps.map(m=>m?m.get(a.account_id):null);
+    const mism = mismatchCount(a, others);
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono">${a.account_id}</td>
+      <td>${a.unlocked_segments_count}</td>
+      <td>${a.expected_allowed_to_date}</td>
+      <td>${a.remaining}</td>
+      <td>${mism?`<span class="bad">${mism}</span>`:`<span class="ok">0</span>`}</td>
+      <td>${a.reclaim_nonce}</td>
+    `;
+    tr.style.cursor = 'pointer';
+    tr.onclick = ()=>viewAccount(a.account_id);
+    tbody.appendChild(tr);
+  }
+}
+
+async function viewAccount(accountId){
+  const nodes = getNodes();
+  if(!accountId){ $('account').innerHTML=''; return; }
+  $('account').innerHTML = 'Loading...';
+
+  const results = await Promise.all(nodes.map(async (n)=>({ node:n, ...(await safeApi(n, `/v1/explorer/accounts/${encodeURIComponent(accountId)}/summary`)) })));
+
+  const rows = results.map(r=>{
+    if(!r.ok) return `<div class="mono"><span class="bad">DOWN</span> ${r.node} <span class="muted">${r.error}</span></div>`;
+    const s = r.data;
+    return `
+      <div class="mono">
+        <span class="ok">OK</span> ${r.node}
+        <span class="muted">unlocked=${s.unlocked_segments_count} allowed=${s.expected_allowed_to_date} remaining=${s.remaining} nonce=${s.reclaim_nonce} last_reclaim=${fmtMs(s.last_reclaim_utc_ms)}</span>
+      </div>
+    `;
+  }).join('');
+
+  // Detect mismatches across OK nodes
+  const okSummaries = results.filter(r=>r.ok).map(r=>r.data);
+  let mism = 0;
+  if(okSummaries.length > 1){
+    const p = okSummaries[0];
+    mism = okSummaries.slice(1).filter(x=>
+      x.unlocked_segments_count !== p.unlocked_segments_count ||
+      x.expected_allowed_to_date !== p.expected_allowed_to_date ||
+      x.remaining !== p.remaining ||
+      x.reclaim_nonce !== p.reclaim_nonce
+    ).length;
+  }
+
+  $('account').innerHTML = `
+    <div><b>account_id:</b> <span class="mono">${accountId}</span> ${mism?`<span class="bad">(mismatch on ${mism} nodes)</span>`:''}</div>
+    <details open><summary><b>Across nodes</b></summary>
+      <div style="margin-top:10px">${rows}</div>
+    </details>
+    <div class="muted" style="margin-top:10px">Tip: if mismatches persist, anchor updates to more nodes.</div>
+  `;
+}
+
+async function lookupSerial(){
+  const nodes = getNodes();
+  const origin = $('serialOrigin').value.trim();
+  const no = $('serialNo').value.trim();
+  if(!origin || no===''){ $('serialOut').innerHTML='<span class="muted">Enter origin and segment_no</span>'; return; }
+
+  $('serialOut').innerHTML = 'Loading...';
+  const results = await Promise.all(nodes.map(async (n)=>({ node:n, ...(await safeApi(n, `/v1/explorer/serial?origin=${encodeURIComponent(origin)}&no=${encodeURIComponent(no)}`)) })));
+
+  const rows = results.map(r=>{
+    if(!r.ok) return `<div class="mono"><span class="bad">DOWN</span> ${r.node} <span class="muted">${r.error}</span></div>`;
+    const seg = r.data.segment;
+    if(!seg) return `<div class="mono"><span class="ok">OK</span> ${r.node} <span class="muted">segment not found</span></div>`;
+    return `
+      <div class="mono">
+        <span class="ok">OK</span> ${r.node}
+        <span class="muted">prev=${seg.previous_account_id} curr=${seg.current_account_id} utc=${fmtMs(seg.last_utc_ms)} ctr=${seg.counter}</span>
+      </div>
+    `;
+  }).join('');
+
+  // mismatch detection for found segments
+  const found = results.filter(r=>r.ok && r.data.segment).map(r=>r.data.segment);
+  let mism = 0;
+  if(found.length > 1){
+    const p = found[0];
+    mism = found.slice(1).filter(s=>
+      s.current_account_id !== p.current_account_id ||
+      s.previous_account_id !== p.previous_account_id ||
+      s.counter !== p.counter ||
+      s.last_utc_ms !== p.last_utc_ms
+    ).length;
+  }
+
+  $('serialOut').innerHTML = `
+    <div><b>Serial:</b> <span class="mono">(${origin}, ${no})</span> ${mism?`<span class="bad">(mismatch on ${mism} nodes)</span>`:''}</div>
+    <details open><summary><b>Across nodes</b></summary>
+      <div style="margin-top:10px">${rows}</div>
+    </details>
+  `;
+}
+
+$('load').onclick = loadDashboard;
+$('next').onclick = async ()=>{ cursor += limit; await loadAccounts(); };
+$('prev').onclick = async ()=>{ cursor = Math.max(0, cursor - limit); await loadAccounts(); };
+$('viewAccount').onclick = ()=>viewAccount($('accountSearch').value.trim());
+$('serialBtn').onclick = lookupSerial;
+</script>
+</body>
+</html>

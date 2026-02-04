@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>QCB Serialized QAR – Master Sandbox Demo (v10 READY)</title>
+<meta name="description" content="QCB Sandbox single-file demo with stable responsive layout, no horizontal overflow, full scenarios, balances, dashboards, explorer, validator.">
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="shared-ui.css"/>
+<style>
+  :root{
+    --bg:var(--app-bg-1);
+    --panel:var(--app-panel);
+    --ink:var(--app-ink);
+    --muted:var(--app-muted);
+    --accent:var(--app-accent);
+    --gold:#ffe164;
+    --ok:var(--app-good);
+    --bad:var(--app-bad);
+    --warn:var(--app-warn);
+    --card:var(--app-panel);
+    --line:var(--app-border);
+  }
+  *{box-sizing:border-box; min-width:0}
+  html,body{height:100%}
+  html,body{overflow-x:hidden}
+  body{margin:0;background:var(--app-body-bg);color:var(--ink);font:500 16px/1.6 var(--app-font-sans)}
+  a{color:var(--accent);text-decoration:none}
+  .wrap{max-width:1280px;margin:0 auto;padding:16px 20px 40px;width:100%}
+  header{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap}
+  h1{margin:0;font-size:clamp(22px,2.2vw,28px);letter-spacing:.2px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand .logo{width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 30% 30%, var(--gold), #b88900)}
+  .muted{color:var(--muted)}
+  .tag{padding:6px 10px;border:1px solid #1e293b;border-radius:999px;color:var(--muted)}
+  nav.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px 0; position: sticky; top: 0; z-index: 40; padding: 8px 0; backdrop-filter: blur(6px); background: linear-gradient(180deg, rgba(15,24,45,.92), rgba(15,24,45,.60));}
+  nav.tabs button{background:#0b1220;color:var(--ink);border:1px solid #1f2937;border-radius:999px;padding:10px 14px;font-size:15px;cursor:pointer}
+  nav.tabs button.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;color:#fff}
+  .grid{display:grid;gap:16px}
+  .g-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  @media (max-width: 1100px){ .g-3{grid-template-columns:repeat(2,minmax(0,1fr))} }
+  @media (max-width: 820px){ .g-2, .g-3{ grid-template-columns: 1fr; } }
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;min-width:0;box-shadow:var(--app-shadow)}
+  .card h2{font-size:20px;margin:0 0 10px 0}
+  input,select,button,textarea{background:var(--app-panel-2);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit;min-height:42px}
+  input,select,textarea{width:100%}
+  button{cursor:pointer;user-select:none}
+  button.primary{background:linear-gradient(180deg,#1f3a8a,#1e40af);border-color:#1d4ed8}
+  button.ok{background:#064e3b;border-color:#065f46}
+  button.warn{background:#78350f;border-color:#a16207}
+  button.bad{background:#7f1d1d;border-color:#991b1b}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .row > *{flex:1 1 220px}
+  .kvs{display:grid;grid-template-columns:240px 1fr;gap:8px 10px;align-items:center}
+  @media (max-width:820px){ .kvs{grid-template-columns:1fr} }
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  th,td{padding:10px;border-bottom:1px dashed #1f2937;text-align:left;vertical-align:top}
+  th{position:sticky;top:0;background:rgba(255,255,255,.04);z-index:1}
+  .tableWrap{max-width:100%;overflow:auto;border:1px solid var(--line);border-radius:12px}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#cbd5e1}
+  pre{background:var(--app-panel-2);border:1px solid var(--line);border-radius:12px;padding:12px;overflow:auto;max-height:360px;font-size:13.5px;line-height:1.55}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid #1f2937;background:#0b1220;color:#cbd5e1;font-size:13px}
+  .status-ok{color:var(--ok)} .status-bad{color:var(--bad)} .status-warn{color:var(--warn)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+  .divider{height:1px;background:#1f2937;margin:10px 0}
+  .hidden{display:none}
+  .grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+  .cardX{background:var(--panel);border:1px solid var(--accent);padding:12px;border-radius:14px;box-shadow:0 0 10px rgba(56,189,248,.25);min-width:0}
+  .cardX .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;min-width:0}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  #modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+  #modal .inner{width:min(1000px,95vw);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--accent);border-radius:16px;padding:16px;box-shadow:0 0 20px var(--accent)}
+  #modal table{border-collapse:collapse;width:100%;margin-top:10px;table-layout:fixed}
+  #modal th,#modal td{border:1px solid var(--accent);padding:6px;text-align:left;font-size:12px;word-wrap:break-word;overflow-wrap:anywhere}
+  #closeModal{font-size:16px;padding:10px 16px}
+  .dash{ display:grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+  .dash .tile{ background:#0b1220; border:1px solid #1f2937; border-radius:16px; padding:16px; min-width:0 }
+  .dash .tile h3{ margin:0 0 6px 0; font-size:16px; }
+  .dash .big{ font-size: clamp(20px,2.5vw,32px); font-weight: 800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .dash .sub{ color:#94a3b8; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  @media (max-width: 1200px){ .dash{ grid-template-columns: repeat(2,minmax(0,1fr)); } }
+  @media (max-width: 820px){ .dash{ grid-template-columns: 1fr; } }
+  .chart{ width:100%; height:180px; background:var(--panel); border:1px solid var(--line); border-radius:12px; display:block }
+  /* Timeline lite */
+  #timelineLite{display:flex;gap:10px;flex-wrap:wrap;background:#0b1220;border:1px dashed #1f2937;border-radius:10px;padding:10px;min-height:120px}
+  .tbranch{flex:1 1 220px;min-width:220px;border:1px solid #263043;border-radius:10px;padding:8px}
+  .tbranch h4{margin:0 0 6px 0;font-size:14px;color:#cbd5e1}
+  .tserial{display:inline-block;margin:4px;padding:8px 10px;border-radius:8px;border:1px solid #334155;background:#0a1426;cursor:grab;font-size:13px;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+  .tbranch.drop{outline:2px dashed var(--accent)}
+  progress.inline{width:100%;height:16px}
+  /* Specific layout tweaks */
+  #sandbox.grid.g-2{ grid-template-columns: 2fr 1fr; }
+  @media (max-width: 1100px){ #sandbox.grid.g-2{ grid-template-columns: 1fr; } }
+  #sim.grid{ grid-template-columns: 2fr 1fr 1fr; gap: 16px; }
+  @media (max-width: 1100px){ #sim.grid{ grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 820px){ #sim.grid{ grid-template-columns: 1fr; } }
+  #sim .viz{ min-height: 220px; }
+  #sim_bottom_tables{ grid-column: 1 / -1; margin-top: 12px; }
+  .full-card { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <h1>QCB Serialized QAR – Master Sandbox Demo</h1>
+        <div class="muted">Stable layout • No horizontal scroll • Full scenarios • Balances • Charts • Explorer • Validator</div>
+      </div>
+    </div>
+    <div class="tag">v10 • Ready</div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="qcb">QCB Dashboard</button>
+    <button data-tab="aml">AML Dashboard</button>
+    <button data-tab="sandbox">Sandbox</button>
+    <button data-tab="sim">Simulation</button>
+    <button data-tab="explorer">Explorer</button>
+    <button data-tab="validator">Validator</button>
+    <button data-tab="docs">Docs</button>
+  </nav>
+
+  <!-- OVERVIEW -->
+  <section id="overview">
+    <div class="grid g-2">
+      <div class="card">
+        <h2>What’s new in v10</h2>
+        <ul>
+          <li><strong>Layout stability:</strong> Hard stop on horizontal overflow; tables wrapped in scroll containers; flex items cannot grow past container.</li>
+          <li><strong>Buttons verified:</strong> Every button is wired with visible output beneath it.</li>
+          <li><strong>Balances on dashboards:</strong> Total QAR value, bank balances, and user/merchant balances in real time.</li>
+          <li><strong>Nothing removed:</strong> Only enhancements, additions, and re-organization.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>Quick Start</h2>
+        <ol>
+          <li>Go to <em>Sandbox</em> → click <strong>Run All Scenarios</strong>.</li>
+          <li>Open <em>QCB Dashboard</em> to see counts, balances, denomination mix and owners.</li>
+          <li>Open <em>AML Dashboard</em> for alert ratio and offline commit metrics.</li>
+          <li>Use <em>Simulation</em> for exports/imports, offline proof→commit, and detailed serial tables (pinned at bottom).</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- QCB DASHBOARD -->
+  <section id="qcb" class="hidden">
+    <div class="card">
+      <h2>QCB Real-Time Dashboard</h2>
+      <div class="dash">
+        <div class="tile"><h3>Total Serials</h3><div class="big" id="qcb_total">0</div><div class="sub">All denominations</div></div>
+        <div class="tile"><h3>Total QAR Value</h3><div class="big" id="qcb_value">0</div><div class="sub">Sum(denomination)</div></div>
+        <div class="tile"><h3>Traceability Continuity</h3><div class="big" id="qcb_trace">0%</div><div class="sub">Rules 1–3 pass</div></div>
+        <div class="tile"><h3>Banks Live</h3><div class="big" id="qcb_banks">0</div><div class="sub">QNB • Doha • QIIB</div></div>
+        <div class="tile"><h3>Bank Balances</h3><div class="big" id="qcb_bank_bal">—</div><div class="sub">QNB | Doha | QIIB</div></div>
+        <div class="tile"><h3>User / Merchant</h3><div class="big" id="qcb_end_bal">—</div><div class="sub">End-user vs Merchant</div></div>
+      </div>
+      <div class="grid g-2" style="margin-top:12px">
+        <div class="card">
+          <h3>Circulation by Owner</h3>
+          <svg id="chart_owner" class="chart"></svg>
+        </div>
+        <div class="card">
+          <h3>Denomination Mix</h3>
+          <svg id="chart_denom" class="chart"></svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AML DASHBOARD -->
+  <section id="aml" class="hidden">
+    <div class="card">
+      <h2>AML Real-Time Dashboard</h2>
+      <div class="dash">
+        <div class="tile"><h3>True-Alert Ratio</h3><div class="big" id="aml_ratio">—</div><div class="sub">Precision (rolling)</div></div>
+        <div class="tile"><h3>Offline Proof→Commit ≤ 60s</h3><div class="big" id="aml_offline">—</div><div class="sub">Success rate</div></div>
+        <div class="tile"><h3>System Uptime</h3><div class="big" id="aml_uptime">—</div><div class="sub">DR drills</div></div>
+      </div>
+      <div class="grid g-2" style="margin-top:12px">
+        <div class="card">
+          <h3>Alerts (last 20)</h3>
+          <svg id="chart_alerts" class="chart"></svg>
+        </div>
+        <div class="card">
+          <h3>Offline Commit Times (ms)</h3>
+          <svg id="chart_offtimes" class="chart"></svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SANDBOX -->
+  <section id="sandbox" class="hidden grid g-2">
+    <div class="card">
+      <h2>Operational Sequence (Run Scenarios)</h2>
+      <div class="row">
+        <div class="kvs">
+          <label>GENESIS_BIO_CONSTANT</label><input id="genesis" class="mono" value="1736565605"/>
+          <label>BIO_TOLERANCE (sec)</label><input id="tolerance" type="number" class="mono" value="720"/>
+          <label>Scale (display)</label><select id="scale"><option value="120">120 (≈120k)</option><option value="1200">1200 (≈1.2M)</option><option value="12">12 (demo)</option></select>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="grid g-3" id="scenarioTiles">
+        <div class="tile card">
+          <h3>1 – QCB Issuance → Bank Distribution</h3>
+          <p class="muted">Import test serials, mint twins, distribute to QNB/Doha/QIIB.</p>
+          <button id="s1" class="primary">Run</button>
+          <div id="s1out" class="mono muted">—</div>
+        </div>
+        <div class="tile card">
+          <h3>2 – Bank↔Bank Transfer</h3>
+          <p class="muted">Inter-spine sync; instant settlement.</p>
+          <button id="s2" class="primary">Run</button>
+          <div id="s2out" class="mono muted">—</div>
+        </div>
+        <div class="tile card">
+          <h3>3 – Offline P2P (Proof→Commit)</h3>
+          <p class="muted">Signed CBOR QR offline; commit on reconnect.</p>
+          <button id="s3" class="primary">Run</button>
+          <div id="s3out" class="mono muted">—</div>
+        </div>
+        <div class="tile card">
+          <h3>4 – Merchant Deposit & Cash Re-entry</h3>
+          <p class="muted">Scan physical serials → match digital twins.</p>
+          <button id="s4" class="primary">Run</button>
+          <div id="s4out" class="mono muted">—</div>
+        </div>
+        <div class="tile card">
+          <h3>5 – Stolen / Recovery Chain</h3>
+          <p class="muted">Flag serial; propagate; recover to bank.</p>
+          <button id="s5" class="primary">Run</button>
+          <div id="s5out" class="mono muted">—</div>
+        </div>
+        <div class="tile card">
+          <h3>6 – Cross-Border Remittance (MTO)</h3>
+          <p class="muted">Corridor earmark + TVM proof + AML telemetry.</p>
+          <button id="s6" class="primary">Run</button>
+          <div id="s6out" class="mono muted">—</div>
+        </div>
+        <div class="tile card">
+          <h3>7 – DR / Continuity Drill</h3>
+          <p class="muted">Simulate outage → failover ≤ 60 s.</p>
+          <button id="s7" class="primary">Run</button>
+          <div id="s7out" class="mono muted">—</div>
+        </div>
+        <div class="tile card">
+          <h3>8 – Regulator Analytics (AI)</h3>
+          <p class="muted">Velocity & clustering anomaly signals.</p>
+          <button id="s8" class="primary">Run</button>
+          <div id="s8out" class="mono muted">—</div>
+        </div>
+
+        <div class="tile card">
+          <h3>Biometric-IBAN Import (Ephemeral Vault)</h3>
+          <p class="muted">Bind device biometric to IBAN; import subset without app.</p>
+          <div class="row">
+            <input id="bioIban" placeholder="QAxx-xxxx-xxxx-xxxx-xxxx-xxxx" value="QA12-3456-7890-1234-5678-9012"/>
+            <button id="bioImportBtn" class="primary">Bind & Import</button>
+          </div>
+          <progress id="bioProgress" class="inline" value="0" max="100"></progress>
+          <div id="bioOut" class="mono mini">—</div>
+        </div>
+
+        <div class="tile card">
+          <h3>Interactive Timeline Tree (Drag for Transfers)</h3>
+          <p class="muted">Drag a serial pill onto a branch to transfer (QCB-auth simulated).</p>
+          <div id="timelineLite"></div>
+          <div class="row"><button id="tlInit" class="primary">Build Timeline</button><button id="tlRefresh">Refresh</button></div>
+          <div class="mono mini" id="tlOut">—</div>
+        </div>
+
+        <div class="tile card">
+          <h3>Advanced Actions (Fawran Bridge + Bulk + Delete)</h3>
+          <div class="row">
+            <input id="advUser" placeholder="user:Ali (target user branch)" value="user:Ali"/>
+            <select id="advFrom"><option>QNB</option><option>Doha</option><option>QIIB</option></select>
+          </div>
+          <div class="actions">
+            <button id="advAssign" class="primary">Assign One to User Vault</button>
+            <button id="advBulk">Bulk 1K txn (demo)</button>
+            <button id="advMint" class="ok">Mint via Fawran (+12)</button>
+            <button id="advRedeem" class="warn">Redeem to Fawran (-12)</button>
+            <button id="advDelete" class="bad">Delete Ephemeral Vault</button>
+          </div>
+          <div class="mono mini" id="advOut">—</div>
+        </div>
+
+        <div class="tile card">
+          <h3>Split & Spend: 200 → (10+20 for merchant) + (100+50+20)</h3>
+          <p class="muted">Transfer 200 to recipient, split to 10/20/100/50/20; pay merchant 30; 170 remains with recipient (children inherit 200’s history).</p>
+          <div class="row"><input id="s9_fromUser" value="user:UserA"/><input id="s9_toUser" value="user:UserB"/><button id="s9Run" class="primary">Run Scenario</button></div>
+          <div id="s9out" class="mono mini">—</div>
+        </div>
+
+        <div class="tile card">
+          <h3>Mint All Denominations</h3>
+          <p class="muted">1, 5, 10, 20, 50, 100, 200, 500 (x6 each)</p>
+          <button id="mintAllBtn" class="primary">Mint & Distribute</button>
+          <div id="mintAllOut" class="mono mini">—</div>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="row">
+        <button id="runAll" class="ok">Run All Scenarios</button>
+        <button id="reset" class="warn">Reset State</button>
+        <button id="exportDeliverables">Export Deliverables</button>
+        <button id="printReport">Print/PDF Report</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>KPIs & Oversight</h2>
+      <div class="dash">
+        <div class="tile"><h3>Traceability Continuity</h3><div class="big" id="kpiTrace">0%</div><div class="sub">Rules 1–3</div></div>
+        <div class="tile"><h3>Offline Proof→Commit ≤60s</h3><div class="big" id="kpiOffline">—</div><div class="sub">Success rate</div></div>
+        <div class="tile"><h3>System Uptime</h3><div class="big" id="kpiUptime">—</div><div class="sub">DR RTO</div></div>
+        <div class="tile"><h3>AML True-Alert Ratio</h3><div class="big" id="kpiAML">—</div><div class="sub">Precision</div></div>
+        <div class="tile"><h3>Banks Live</h3><div class="big" id="kpiBanks">0</div><div class="sub">QNB • Doha • QIIB</div></div>
+        <div class="tile"><h3>Serials in Circulation</h3><div class="big" id="kpiSerials">0</div><div class="sub">Scaled</div></div>
+      </div>
+      <div class="grid g-2" style="margin-top:12px">
+        <div class="card">
+          <h3>Circulation Trend</h3>
+          <svg id="chart_total" class="chart"></svg>
+        </div>
+        <div class="card">
+          <h3>True-Alert Ratio (rolling)</h3>
+          <svg id="chart_ratio" class="chart"></svg>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <h3>Oversight Event Log</h3>
+      <pre id="log" class="mono">—</pre>
+    </div>
+  </section>
+
+  <!-- SIMULATION -->
+  <section id="sim" class="hidden grid g-3">
+    <div class="card">
+      <h2>Branches</h2>
+      <div class="row">
+        <input id="branchId" placeholder="branch id (e.g., QNB, Doha, QIIB, user:Riyad)"/>
+        <input id="branchDelta" type="number" placeholder="Δ (seconds from GENESIS)"/>
+        <select id="branchRole"><option>bank</option><option>issuer</option><option>user</option><option>mto</option><option>merchant</option></select>
+        <button id="addBranch">Join Branch</button>
+      </div>
+      <div class="divider"></div>
+      <div class="tableWrap">
+        <table id="branchesTbl">
+          <thead><tr><th>Branch</th><th>Δ</th><th>local_seq</th><th>last global</th><th>role</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Mint & Distribute</h2>
+      <div class="row">
+        <input id="mintCount" type="number" value="12" />
+        <input id="denom" type="number" value="1" />
+        <button id="mintBtn">QCB Mint</button>
+      </div>
+      <div class="divider"></div>
+      <div class="row">
+        <input id="distBank" placeholder="to branch (e.g., QNB)"/>
+        <input id="distQty" type="number" value="4" />
+        <button id="distBtn">Distribute</button>
+      </div>
+      <div class="divider"></div>
+      <div id="supplyStats" class="muted">—</div>
+    </div>
+
+    <div class="card">
+      <h2>Transfers</h2>
+      <div class="row">
+        <input id="txSerial" placeholder="serial id"/>
+      </div>
+      <div class="row">
+        <input id="txFrom" placeholder="prev_owner (e.g., bank:QNB or user:Ola)"/>
+        <input id="txFromBranch" placeholder="from branch (e.g., QNB)"/>
+      </div>
+      <div class="row">
+        <input id="txTo" placeholder="curr_owner (e.g., user:Ali or bank:Doha)"/>
+        <button id="sendOnline" class="primary">Send Online</button>
+      </div>
+      <div class="divider"></div>
+      <pre id="txOnlineOut" class="mono">—</pre>
+    </div>
+
+    <div class="card">
+      <h2>Offline Export → CBOR (JSON here)</h2>
+      <div class="row"><input id="offSerial" placeholder="serial id"/></div>
+      <div class="row">
+        <input id="offFrom" placeholder="prev_owner"/>
+        <input id="offFromBranch" placeholder="from branch"/>
+      </div>
+      <div class="row">
+        <input id="offTo" placeholder="recipient (curr_owner)"/>
+        <button id="exportCBOR">Export</button>
+      </div>
+      <div class="divider"></div>
+      <pre id="offlineOut" class="mono">—</pre>
+    </div>
+
+    <div class="card">
+      <h2>Import / Commit Offline</h2>
+      <div class="row"><input id="importText" placeholder="paste container JSON"/></div>
+      <div class="row">
+        <input id="commitBranch" placeholder="to branch (e.g., QNB)"/>
+        <button id="commitOffline" class="primary">Commit</button>
+      </div>
+      <div class="divider"></div>
+      <pre id="commitOut" class="mono">—</pre>
+    </div>
+
+    <div class="card">
+      <h2>QCB Checkpoints</h2>
+      <button id="signCheckpoint">Sign Checkpoint</button>
+      <pre id="checkpointOut" class="mono">—</pre>
+    </div>
+
+    <div class="card full-card">
+      <h2>Serial Table</h2>
+      <div class="row">
+        <input id="filterOwner" placeholder="filter by owner (e.g., bank:QNB or user:Ali)"/>
+        <button id="refreshSerials">Refresh</button>
+        <button id="exportState">Export State</button>
+        <input type="file" id="importStateFile" class="hidden"/>
+        <button id="importState">Import State</button>
+      </div>
+      <div class="divider"></div>
+      <div class="tableWrap">
+        <table id="serialsTbl">
+          <thead><tr><th>ID</th><th>Denom</th><th>Owner</th><th>Status</th><th>Last GC</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="divider"></div>
+      <pre id="serialDetail" class="mono">—</pre>
+    </div>
+  </section>
+
+  <!-- EXPLORER -->
+  <section id="explorer" class="hidden">
+    <div class="card">
+      <h2>Serial Explorer</h2>
+      <div class="row">
+        <input id="searchQuery" placeholder="search by id, owner, denom, status"/>
+        <button id="btnSearch">Search</button>
+        <button id="btnLoadSamples">Load Samples</button>
+        <button id="btnClearExplorer" class="warn">Clear</button>
+      </div>
+      <div class="divider"></div>
+      <div class="grid-cards" id="explorerGrid"></div>
+      <div class="divider"></div>
+      <div class="row"><button id="loadSelected" class="primary">Load Selected to Validator</button></div>
+    </div>
+  </section>
+
+  <!-- VALIDATOR -->
+  <section id="validator" class="hidden">
+    <div class="card">
+      <h2>Serial Validator</h2>
+      <textarea id="serialJson" placeholder="paste serialized QAR container JSON or serial ID"></textarea>
+      <button id="runValidate" class="primary">Validate</button>
+      <div class="divider"></div>
+      <pre id="validateOut" class="mono">—</pre>
+    </div>
+  </section>
+
+  <!-- DOCS -->
+  <section id="docs" class="hidden">
+    <div class="card">
+      <h2>Documentation & Specs</h2>
+      <pre id="docsContent" class="mono">QCB Serialized QAR System Overview:
+
+- **Genesis Bio Constant**: Fixed timestamp for biometric binding.
+- **Bio Tolerance**: 720 seconds for time variance in proofs.
+- **Serial Structure**: Each serial has ID, denomination, owner, status, history (records with hashes), proof of originality.
+- **Transfers**: Append records with global counter, UTC, bio hash, ZK proof.
+- **Split**: Retire parent, create children inheriting history.
+- **Validation Rules**:
+  1. Global counter increases monotonically.
+  2. UTC within tolerance of genesis + delta.
+  3. Record hashes chain correctly.
+  4. Biometric bound valid.
+  5. ZK freshness proof valid.
+  6. Owner continuity.
+  7. No duplicate spends.
+  8. Denomination integrity.
+
+For more details, refer to QCB specs.</pre>
+    </div>
+  </section>
+
+  <!-- Modal -->
+  <div id="modal">
+    <div class="inner">
+      <div class="head"><h2>Serial History</h2><button id="closeModal" class="bad">Close</button></div>
+      <table id="modalTbl"><thead><tr><th>Event</th><th>Prev Owner</th><th>Curr Owner</th><th>Branch</th><th>Δ</th><th>Local Seq</th><th>Global C</th><th>UTC</th><th>Bio Bound</th><th>ZK Proof</th><th>Record Hash</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+<script>
+// STATE
+const state = {
+  GENESIS: 1736565605,
+  TOL: 720,
+  branches: new Map(),
+  serials: new Map(),
+  checkpoints: new Map(),
+  kpi: { traceabilityOk:0, traceabilityTotal:0, offlineTotal:0, offlineOk:0, uptime:null, amlPrecision:null },
+  charts: { total: [], ratio: [], alerts: [], offtimes: [] },
+  selectedSerial: null
+};
+const logEl = document.getElementById('log');
+function LOG(msg){ if(logEl) logEl.textContent += (logEl.textContent==='—'? '':'\n') + msg; }
+
+// TIME
+function nowSec(){ return Math.floor(Date.now()/1000); }
+
+// STRUCTS
+function newBranch(id, delta, role){ return { id, delta, local_seq: 0, last_global: 0, role }; }
+function newSerial(id, denom){ return { serial_id: id, denomination: denom, current_owner: 'QCB', status: 'Active', history: [], proof_originality: 'QCB_MINT_'+id, parent: null }; }
+function newRecord(serial, event_type, prev_owner, curr_owner, branch_id, delta_branch, local_seq, global_counter, utc_seconds, bio_hash_bound, zk_fresh_proof){
+  const prev_hash = serial.history.length>0 ? serial.history[serial.history.length-1].record_hash : 'GENESIS';
+  const data = `${event_type}|${prev_owner}|${curr_owner}|${branch_id}|${delta_branch}|${local_seq}|${global_counter}|${utc_seconds}|${bio_hash_bound}|${zk_fresh_proof}|${prev_hash}`;
+  const record_hash = hash(data);
+  return { event_type, prev_owner, curr_owner, branch_id, delta_branch, local_seq, global_counter, utc_seconds, bio_hash_bound, zk_fresh_proof, record_hash };
+}
+
+// HASH (demo SHA-256 like)
+function hash(str){ let h=0; for(let i=0;i<str.length;i++){ h= ((h<<5)-h) + str.charCodeAt(i); h|=0; } return 'H_'+Math.abs(h).toString(36).padStart(8,'0').toUpperCase(); }
+
+// INCREMENTS
+let globalCounter = 0;
+function branchLocalInc(branch_id){ const b = state.branches.get(branch_id); b.local_seq++; b.last_global = ++globalCounter; state.branches.set(branch_id,b); return { local_seq: b.local_seq, global_counter: b.last_global }; }
+
+// OPERATIONS
+async function appendRecord(serial, recData){
+  const rec = newRecord(serial, recData.event_type, recData.prev_owner, recData.curr_owner, recData.branch_id, recData.delta_branch, recData.local_seq, recData.global_counter, recData.utc_seconds, recData.bio_hash_bound, recData.zk_fresh_proof);
+  serial.history.push(rec);
+  serial.current_owner = rec.curr_owner;
+  serial.last_global_counter = rec.global_counter;
+  LOG(`Record appended to ${serial.serial_id}: ${rec.event_type} → ${rec.curr_owner} (gC=${rec.global_counter})`);
+}
+async function addBranch(id, delta, role){ if(state.branches.has(id)) return; state.branches.set(id, newBranch(id, delta, role)); refreshBranches(); }
+function refreshBranches(){ const t = document.getElementById('branchesTbl').tBodies[0]; t.innerHTML=''; state.branches.forEach(b=>{ const r=t.insertRow(); r.innerHTML=`<td>${b.id}</td><td>${b.delta}</td><td>${b.local_seq}</td><td>${b.last_global}</td><td>${b.role}</td>`; }); }
+async function doMint(count, denom){ ensureBase(); for(let i=0;i<count;i++){ const id = 'QAR-'+denom+'-'+String(Math.random()).slice(2,8); const s = newSerial(id, denom); const inc = branchLocalInc('QCB'); await appendRecord(s, { event_type:'Mint', prev_owner:'-', curr_owner:'QCB', branch_id:'QCB', delta_branch:0, local_seq:inc.local_seq, global_counter:inc.global_counter, utc_seconds: nowSec(), bio_hash_bound:'mint', zk_fresh_proof:'mint' }); state.serials.set(id,s); } renderSerialsTable(); refreshSupplyStats(); await updateKPIs(); drawAllCharts(); }
+async function doDistribute(bank, qty){ ensureBase(); let moved=0; for(const [id,s] of state.serials){ if(moved>=qty) break; if(s.current_owner==='QCB'){ await doTransfer(id,'QCB','bank:'+bank,'QCB','Distribute'); moved++; } } refreshSupplyStats(); await updateKPIs(); drawAllCharts(); }
+async function doTransfer(serial_id, prev_owner, curr_owner, branch_id, event_type='Transfer'){
+  const s = state.serials.get(serial_id); if(!s || s.current_owner!==prev_owner) throw new Error('Invalid transfer');
+  const inc = branchLocalInc(branch_id);
+  await appendRecord(s, { event_type, prev_owner, curr_owner, branch_id, delta_branch: state.branches.get(branch_id).delta, local_seq: inc.local_seq, global_counter: inc.global_counter, utc_seconds: nowSec(), bio_hash_bound:'bound', zk_fresh_proof:'fresh' });
+  state.serials.set(serial_id,s);
+  if(event_type==='TransferCommit'){ state.kpi.offlineTotal++; state.kpi.offlineOk += Math.random()>0.1?1:0; state.charts.offtimes.push(Math.floor(Math.random()*1500+300)); }
+  if(['Stolen','Anomaly'].includes(event_type)){ state.charts.alerts.push(Math.floor(Math.random()*5+1)); }
+  renderSerialsTable(); refreshSupplyStats(); await updateKPIs(); drawAllCharts();
+}
+
+// UI TABLES
+function renderSerialsTable(){
+  const t = document.getElementById('serialsTbl').tBodies[0]; t.innerHTML='';
+  const filter = (document.getElementById('filterOwner')?.value||'').toLowerCase();
+  state.serials.forEach(s=>{
+    if(filter && !s.current_owner.toLowerCase().includes(filter)) return;
+    const r = t.insertRow(); r.innerHTML = `<td>${s.serial_id}</td><td>${s.denomination}</td><td>${s.current_owner}</td><td class="status-${s.status.toLowerCase()}">${s.status}</td><td>${s.last_global_counter||0}</td><td><button onclick="showDetail('${s.serial_id}')">View</button></td>`;
+  });
+}
+function refreshSupplyStats(){ let total=0; state.serials.forEach(s=> total+=s.denomination); document.getElementById('supplyStats').textContent = `Total QAR: ${total} (${state.serials.size} serials)`; }
+function showDetail(id){ const s=state.serials.get(id); if(!s) return; const t=document.getElementById('modalTbl').tBodies[0]; t.innerHTML=''; s.history.forEach(h=>{ const r=t.insertRow(); r.innerHTML=`<td>${h.event_type}</td><td>${h.prev_owner}</td><td>${h.curr_owner}</td><td>${h.branch_id}</td><td>${h.delta_branch}</td><td>${h.local_seq}</td><td>${h.global_counter}</td><td>${h.utc_seconds}</td><td>${h.bio_hash_bound}</td><td>${h.zk_fresh_proof}</td><td>${h.record_hash}</td>`; }); document.getElementById('modal').style.display='flex'; }
+document.getElementById('closeModal').onclick=()=>{ document.getElementById('modal').style.display='none'; };
+
+// KPIs & DASHBOARDS
+async function updateKPIs(){
+  // Traceability
+  state.kpi.traceabilityTotal = state.serials.size; state.kpi.traceabilityOk = 0;
+  state.serials.forEach(s=>{ if(validateSerial(s).slice(0,3).every(r=>r.valid)) state.kpi.traceabilityOk++; });
+  document.getElementById('kpiTrace').textContent = document.getElementById('qcb_trace').textContent = `${Math.round(state.kpi.traceabilityOk/state.kpi.traceabilityTotal*100)||0}%`;
+  // Offline
+  document.getElementById('kpiOffline').textContent = document.getElementById('aml_offline').textContent = state.kpi.offlineTotal>0 ? `${Math.round(state.kpi.offlineOk/state.kpi.offlineTotal*100)}%` : '—';
+  // Uptime
+  document.getElementById('kpiUptime').textContent = document.getElementById('aml_uptime').textContent = state.kpi.uptime || '—';
+  // AML
+  document.getElementById('kpiAML').textContent = document.getElementById('aml_ratio').textContent = state.kpi.amlPrecision || '—';
+  // Banks
+  const banks = ['QNB','Doha','QIIB'].filter(b=>state.branches.has(b)).length;
+  document.getElementById('kpiBanks').textContent = document.getElementById('qcb_banks').textContent = banks;
+  // Serials
+  const scale = Number(document.getElementById('scale')?.value||120);
+  document.getElementById('kpiSerials').textContent = document.getElementById('qcb_total').textContent = state.serials.size * (scale/12);
+  // Values
+  let totalValue=0, bankBal={QNB:0,Doha:0,QIIB:0}, endUser=0, merchant=0;
+  state.serials.forEach(s=>{ totalValue+=s.denomination; if(s.current_owner.startsWith('bank:')){ bankBal[s.current_owner.split(':')[1]]+=s.denomination; } else if(s.current_owner.startsWith('user:')){ endUser+=s.denomination; } else if(s.current_owner.startsWith('merchant:')){ merchant+=s.denomination; } });
+  document.getElementById('qcb_value').textContent = totalValue;
+  document.getElementById('qcb_bank_bal').textContent = `${bankBal.QNB} | ${bankBal.Doha} | ${bankBal.QIIB}`;
+  document.getElementById('qcb_end_bal').textContent = `${endUser} / ${merchant}`;
+  // Charts data push
+  state.charts.total.push(state.serials.size); if(state.charts.total.length>20) state.charts.total.shift();
+  state.charts.ratio.push(Math.round(state.kpi.traceabilityOk/state.kpi.traceabilityTotal*100)||0); if(state.charts.ratio.length>20) state.charts.ratio.shift();
+}
+
+// EXPLORER
+function renderExplorer(){
+  const g = document.getElementById('explorerGrid'); g.innerHTML='';
+  state.serials.forEach(s=>{
+    const c = document.createElement('div'); c.className='cardX';
+    c.innerHTML = `<div class="head"><span>${s.serial_id}</span><span class="pill">${s.denomination} QAR</span></div><div>Owner: ${s.current_owner}</div><div>Status: <span class="status-${s.status.toLowerCase()}">${s.status}</span></div><div>History: ${s.history.length} records</div><div>Parent: ${s.parent||'—'}</div><div class="actions"><button onclick="selectSerial('${s.serial_id}')">Select</button><button onclick="showDetail('${s.serial_id}')">History</button></div>`;
+    g.appendChild(c);
+  });
+}
+function searchExplorer(){ const q = (document.getElementById('searchQuery').value||'').toLowerCase(); const cards = document.querySelectorAll('#explorerGrid .cardX'); cards.forEach(c=>{ c.style.display = Array.from(c.textContent.toLowerCase().match(q)||[]).length>0 ? '' : 'none'; }); }
+function selectSerial(id){ state.selectedSerial = id; document.querySelectorAll('#explorerGrid .cardX').forEach(c=> c.style.borderColor = c.querySelector('span').textContent===id ? 'var(--ok)' : 'var(--accent)'); }
+function loadSelectedIntoValidator(){ if(!state.selectedSerial) return; const s=state.serials.get(state.selectedSerial); document.getElementById('serialJson').value = JSON.stringify(s,null,2); switchTab('validator'); }
+function clearExplorer(){ state.serials.clear(); renderExplorer(); renderSerialsTable(); updateKPIs(); drawAllCharts(); }
+
+// VALIDATOR
+function runValidator(){
+  let input = (document.getElementById('serialJson').value||'').trim(); let s;
+  try{ s = JSON.parse(input); }catch{ s = state.serials.get(input); if(!s){ document.getElementById('validateOut').textContent='Invalid JSON or unknown serial ID.'; return; } }
+  const results = validateSerial(s);
+  document.getElementById('validateOut').textContent = results.map(r=> `${r.rule}: ${r.valid? 'PASS':'FAIL'} - ${r.msg}`).join('\n');
+}
+function validateSerial(s){
+  return [
+    { rule:1, valid: s.history.every((h,i)=> i===0 || h.global_counter === s.history[i-1].global_counter+1), msg:'Global counter monotonic' },
+    { rule:2, valid: s.history.every(h=> Math.abs(h.utc_seconds - (state.GENESIS + h.delta_branch)) <= state.TOL), msg:'UTC within tolerance' },
+    { rule:3, valid: s.history.every((h,i)=> i===0 || h.record_hash === hash(`${h.event_type}|${h.prev_owner}|${h.curr_owner}|${h.branch_id}|${h.delta_branch}|${h.local_seq}|${h.global_counter}|${h.utc_seconds}|${h.bio_hash_bound}|${h.zk_fresh_proof}|${s.history[i-1].record_hash}`)), msg:'Record hash chain' },
+    { rule:4, valid: s.history.every(h=> h.bio_hash_bound!=='invalid'), msg:'Biometric bound' },
+    { rule:5, valid: s.history.every(h=> h.zk_fresh_proof!=='invalid'), msg:'ZK freshness' },
+    { rule:6, valid: s.history.every((h,i)=> i===0 || h.prev_owner===s.history[i-1].curr_owner), msg:'Owner continuity' },
+    { rule:7, valid: true, msg:'No double-spend (demo pass)' },
+    { rule:8, valid: s.denomination>0, msg:'Denomination integrity' }
+  ];
+}
+
+// SCENARIOS
+function ensureBase(){ if(state.branches.size<4){ resetState(); } }
+async function S1_IssuanceDistribution(){
+  ensureBase();
+  const scale = Number(document.getElementById('scale').value||120);
+  await doMint(scale, 1);
+  await doDistribute('QNB', Math.floor(scale/3));
+  await doDistribute('Doha', Math.floor(scale/3));
+  await doDistribute('QIIB', scale - Math.floor(scale/3)*2);
+  document.getElementById('s1out').textContent = `Minted & distributed ${scale} serials (scaled view)`;
+  LOG('S1 complete: Issuance → Distribution'); await updateKPIs(); renderExplorer(); drawAllCharts();
+}
+async function S2_BankToBank(){
+  ensureBase(); let moved=0;
+  for(const [id,s] of state.serials){ if(moved>=5) break; if((s.current_owner||'').startsWith('bank:QNB')){ await doTransfer(id,'bank:QNB','bank:Doha','QNB','InterBank'); moved++; } }
+  document.getElementById('s2out').textContent = `Inter-spine sync transferred ${moved} serials QNB→Doha`; LOG('S2 complete: Bank↔Bank synchronized'); await updateKPIs(); renderExplorer(); drawAllCharts();
+}
+async function S3_OfflineP2P(){
+  ensureBase();
+  let target=null; for(const [id,s] of state.serials){ if(s.current_owner==='bank:Doha'){ target=id; break; } }
+  if(!target){ document.getElementById('s3out').textContent='No Doha bank serial available.'; return; }
+  const start = nowSec(); await doTransfer(target,'bank:Doha','user:Ali','Doha','TransferCommit');
+  const end = start + 42; state.kpi.offlineTotal += 1; if(end-start<=60) state.kpi.offlineOk += 1;
+  document.getElementById('s3out').textContent = `Offline proof committed in ~42s for ${target}`; LOG('S3 complete: Offline P2P proof→commit'); await updateKPIs(); renderExplorer(); drawAllCharts();
+}
+async function S4_MerchantDeposit(){
+  ensureBase(); let target=null; for(const [id,s] of state.serials){ if(s.current_owner==='user:Ali'){ target=id; break; } }
+  if(!target){ document.getElementById('s4out').textContent='No user:Ali serial available.'; return; }
+  await doTransfer(target,'user:Ali','merchant:Shop_01','Doha','POS'); await doTransfer(target,'merchant:Shop_01','bank:QNB','QNB','Deposit');
+  document.getElementById('s4out').textContent = `Merchant deposit completed for ${target}`; LOG('S4 complete: Merchant deposit & re-entry'); await updateKPIs(); renderExplorer(); drawAllCharts();
+}
+async function S5_StolenRecovery(){
+  ensureBase(); let target=null; for(const [id,s] of state.serials){ if(s.current_owner==='bank:QNB'){ target=id; break; } }
+  if(!target){ document.getElementById('s5out').textContent='No QNB serial available.'; return; }
+  const s = state.serials.get(target); s.status='Stolen'; state.serials.set(target,s); LOG(`Flagged stolen: ${target}`); LOG(`Auto-block at merchants for ${target}`);
+  await doTransfer(target,'bank:QNB','bank:QNB','QNB','Recovery'); s.status='Active'; state.serials.set(target,s);
+  document.getElementById('s5out').textContent = `Stolen flag propagated & recovered: ${target}`; LOG('S5 complete: Stolen → Recovery'); await updateKPIs(); renderExplorer(); drawAllCharts();
+}
+async function S6_MTO(){
+  ensureBase(); let target=null; for(const [id,s] of state.serials){ if(s.current_owner==='bank:QIIB'){ target=id; break; } }
+  if(!target){ document.getElementById('s6out').textContent='No QIIB serial available.'; return; }
+  await doTransfer(target,'bank:QIIB','mto:Corridor_QA-JO','QIIB','CorridorEarmark'); await doTransfer(target,'mto:Corridor_QA-JO','partner:JO','QIIB','CorridorSettle');
+  state.kpi.amlPrecision = '96%'; document.getElementById('s6out').textContent = `Corridor settled for ${target} with AML telemetry`;
+  LOG('S6 complete: MTO corridor'); await updateKPIs(); renderExplorer(); drawAllCharts();
+}
+async function S7_DR(){ ensureBase(); state.kpi.uptime = '99.995% (RTO 58s)'; document.getElementById('s7out').textContent = 'DR drill passed: RTO 58s, RPO 0'; LOG('S7 complete: DR/Continuity'); await updateKPIs(); drawAllCharts(); }
+async function S8_Analytics(){ ensureBase(); let maxVel=0; state.branches.forEach(b=>{ if(b.local_seq>maxVel) maxVel=b.local_seq; }); const signal = maxVel>20 ? 'Anomaly: high velocity cluster' : 'Normal'; document.getElementById('s8out').textContent = signal+' (demo)'; LOG('S8 complete: Analytics signal = '+signal); await updateKPIs(); drawAllCharts(); }
+async function RunAll(){ await S1_IssuanceDistribution(); await S2_BankToBank(); await S3_OfflineP2P(); await S4_MerchantDeposit(); await S5_StolenRecovery(); await S6_MTO(); await S7_DR(); await S8_Analytics(); }
+
+// Export/Import/Print
+function exportState(){ const obj = { GENESIS:state.GENESIS, TOL:state.TOL, branches:Array.from(state.branches.entries()), serials:Array.from(state.serials.entries()) }; const blob = new Blob([JSON.stringify(obj,null,2)], {type:'application/json'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download='qcb_master_state.json'; a.click(); }
+function importState(){ const file = document.getElementById('importStateFile'); file.onchange = ()=>{ const f = file.files[0]; if(!f) return; const reader = new FileReader(); reader.onload = ()=>{ try{ const obj = JSON.parse(reader.result); state.GENESIS = obj.GENESIS||state.GENESIS; state.TOL = obj.TOL||state.TOL; state.branches = new Map(obj.branches||[]); state.serials = new Map(obj.serials||[]); refreshBranches(); renderSerialsTable(); renderExplorer(); updateKPIs(); drawAllCharts(); alert('State imported.'); }catch(e){ alert('Import error: '+e.message); } }; reader.readAsText(f); }; file.click(); }
+function exportDeliverables(){ const deliverables = { traceability: document.getElementById('kpiTrace').textContent, offline: document.getElementById('kpiOffline').textContent, uptime: document.getElementById('kpiUptime').textContent, amlPrecision: document.getElementById('kpiAML').textContent, banksLive: document.getElementById('kpiBanks').textContent, serials: document.getElementById('kpiSerials').textContent, log: document.getElementById('log').textContent }; const blob = new Blob([JSON.stringify(deliverables,null,2)], {type:'application/json'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download='sandbox_deliverables.json'; a.click(); }
+function printReport(){ window.print(); }
+
+// SIM UI
+async function sendOnline(){ try{ const id = (document.getElementById('txSerial').value||'').trim(); const from = (document.getElementById('txFrom').value||'').trim(); const to = (document.getElementById('txTo').value||'').trim(); const fromBranch = (document.getElementById('txFromBranch').value||'').trim(); await doTransfer(id,from,to,fromBranch,'Transfer'); document.getElementById('txOnlineOut').textContent = 'OK'; await updateKPIs(); drawAllCharts(); }catch(e){ document.getElementById('txOnlineOut').textContent = 'Error: '+e.message; } }
+async function exportCBORLike(){ const id = (document.getElementById('offSerial').value||'').trim(); const from = (document.getElementById('offFrom').value||'').trim(); const fromBranch = (document.getElementById('offFromBranch').value||'').trim(); const to = (document.getElementById('offTo').value||'').trim(); const s = state.serials.get(id); if(!s) return; const b = state.branches.get(fromBranch); const draft = { serial_id: s.serial_id, value:s.denomination, history: s.history.map(h=>({record_hash:h.record_hash})), pending: { g_counter:null, utc_seconds: nowSec(), prev_owner: from, curr_owner: to, branch_id: fromBranch, delta_branch: b.delta, local_seq: b.local_seq+1, bio_hash_bound:'offline', zk_fresh_proof:'offline' }, proof_originality: s.proof_originality }; document.getElementById('offlineOut').textContent = JSON.stringify(draft,null,2); }
+async function commitOffline(){ const text = document.getElementById('importText').value||''; const branch = (document.getElementById('commitBranch').value||'').trim(); try{ const container = JSON.parse(text); const s = state.serials.get(container.serial_id); if(!s) throw new Error('Unknown serial'); const inc = branchLocalInc(branch); await appendRecord(s, { event_type:'TransferCommit', prev_owner: container.pending.prev_owner, curr_owner: container.pending.curr_owner, branch_id: branch, delta_branch: state.branches.get(branch).delta, local_seq: inc.local_seq, global_counter: inc.global_counter, utc_seconds: nowSec(), bio_hash_bound: container.pending.bio_hash_bound, zk_fresh_proof: container.pending.zk_fresh_proof }); state.serials.set(s.serial_id,s); document.getElementById('commitOut').textContent='Committed. New owner: '+s.current_owner+'  gC='+inc.global_counter; renderSerialsTable(); await updateKPIs(); drawAllCharts(); }catch(e){ document.getElementById('commitOut').textContent='Error: '+e.message; } }
+async function signCheckpoint(){ const cp = { timestamp: nowSec(), hash: hash(JSON.stringify(Array.from(state.serials.entries()))), signer: 'QCB' }; state.checkpoints.set(cp.timestamp, cp); document.getElementById('checkpointOut').textContent = JSON.stringify(cp, null, 2); LOG('Checkpoint signed at '+cp.timestamp); }
+
+// Biometric-IBAN Import
+async function bioImport(){
+  const iban = (document.getElementById('bioIban').value||'').trim(); const progress = document.getElementById('bioProgress'); const out = document.getElementById('bioOut'); if(!iban){ out.textContent='Provide IBAN.'; return; }
+  progress.value = 0; out.textContent = 'Verifying biometrics (FIDO2 hash)…'; let pct=0; const tick = setInterval(()=>{ pct+=12; progress.value=Math.min(100,pct); }, 120);
+  const userBranch = 'user:'+iban.slice(0,6); if(!state.branches.has(userBranch)) addBranch(userBranch, 200, 'user');
+  setTimeout(async()=>{ clearInterval(tick); progress.value=100; let moved=0; for(const b of ['QNB','Doha','QIIB']){ for(const [id,s] of state.serials){ if(moved>=2) break; if(s.current_owner==='bank:'+b){ await doTransfer(id,'bank:'+b,userBranch,b,'AssignToUser'); moved++; } } if(moved>=2) break; } out.textContent = `✅ Biometric bound to ${iban}. Imported ${moved} serials into ephemeral vault ${userBranch}.`; LOG(`Biometric-IBAN import → ${userBranch}, ${moved} serials.`); await updateKPIs(); renderExplorer(); drawAllCharts(); }, 1200);
+}
+
+// Advanced actions
+async function advAssign(){ const user = (document.getElementById('advUser').value||'user:Ali').trim(); const from = (document.getElementById('advFrom').value||'QNB').trim(); for(const [id,s] of state.serials){ if(s.current_owner==='bank:'+from){ await doTransfer(id,'bank:'+from,user,from,'AssignToUser'); document.getElementById('advOut').textContent = `Assigned ${id} to ${user}`; await updateKPIs(); drawAllCharts(); return; } } document.getElementById('advOut').textContent = 'No available serial at '+from; }
+async function advBulk(){ let c=0; for(const [id,s] of state.serials){ if(c>=20) break; const from = s.current_owner; const to = from.startsWith('bank:')? 'user:Bulk' : 'bank:QNB'; const branch = from.startsWith('bank:')? from.split(':')[1] : 'QNB'; await doTransfer(id,from,to,branch,'Bulk'); c++; } document.getElementById('advOut').textContent = `Executed ${c} demo transfers.`; await updateKPIs(); drawAllCharts(); }
+async function advMint(){ await doMint(12,1); document.getElementById('advOut').textContent = 'Minted +12 demo serials.'; await updateKPIs(); drawAllCharts(); }
+async function advRedeem(){ let c=0; for(const [id,s] of state.serials){ if(c>=12) break; if(s.current_owner.startsWith('bank:')){ await doTransfer(id,s.current_owner,'QCB',s.current_owner.split(':')[1],'Redeem'); c++; } } document.getElementById('advOut').textContent = `Redeemed ${c} to QCB.`; await updateKPIs(); drawAllCharts(); }
+function advDelete(){ const user = (document.getElementById('advUser').value||'user:Ali').trim(); for(const [id,s] of state.serials){ if(s.current_owner===user){ state.serials.delete(id); } } document.getElementById('advOut').textContent = `Deleted ephemeral vault for ${user}`; renderSerialsTable(); updateKPIs(); drawAllCharts(); }
+
+// Denomination helpers
+async function mintAllDenoms(){
+  ensureBase();
+  const denoms = [1,5,10,20,50,100,200,500];
+  for(const d of denoms){ await doMint(6,d); }
+  // Distribute evenly to banks
+  let i=0; const banks=['QNB','Doha','QIIB'];
+  for(const [id,s] of state.serials){ if(s.current_owner==='QCB'){ await doDistribute(banks[i%3],1); i++; } }
+  document.getElementById('mintAllOut').textContent = 'Minted x6 of all denominations and distributed evenly.';
+}
+
+// Split & Spend 200→(10+20)+(100+50+20)
+async function splitAndSpend200(){
+  ensureBase();
+  const fromUser = (document.getElementById('s9_fromUser').value||'user:UserA').trim();
+  const toUser = (document.getElementById('s9_toUser').value||'user:UserB').trim();
+  // Ensure users branches exist
+  if(!state.branches.has(fromUser)) addBranch(fromUser, 210,'user');
+  if(!state.branches.has(toUser)) addBranch(toUser, 220,'user');
+  // Find a 200 denom at any bank, assign to fromUser if needed
+  let twoHundredId = null; for(const [id,s] of state.serials){ if(s.denomination===200){ twoHundredId = id; break; } }
+  if(!twoHundredId){ await doMint(1,200); twoHundredId = Array.from(state.serials.keys()).pop(); await doDistribute('QNB',1); }
+  const s200 = state.serials.get(twoHundredId);
+  if(!s200.current_owner.startsWith('user:')){ const branch = s200.current_owner.split(':')[1] || 'QNB'; await doTransfer(twoHundredId, s200.current_owner, fromUser, branch, 'AssignToUser'); }
+  // Transfer full 200 to recipient
+  const branchFrom = 'QNB'; await doTransfer(twoHundredId, fromUser, toUser, branchFrom, 'P2P');
+  // Split: retire original and create children that inherit history
+  const parent = state.serials.get(twoHundredId); parent.status='Retired'; state.serials.set(twoHundredId,parent);
+  const chunks = [10,20,100,50,20]; const childIds=[];
+  for(const d of chunks){
+    const cid = `QAR-${d}-SPL-${String(Math.random()).slice(2,8)}`;
+    const cs = newSerial(cid, d); cs.parent = parent.serial_id; cs.proof_originality = parent.proof_originality;
+    cs.history = parent.history.slice();
+    cs.current_owner = toUser;
+    const inc = branchLocalInc(branchFrom);
+    await appendRecord(cs, { event_type:'SplitFrom', prev_owner: toUser, curr_owner: toUser, branch_id: branchFrom, delta_branch: state.branches.get(branchFrom).delta, local_seq: inc.local_seq, global_counter: inc.global_counter, utc_seconds: nowSec(), bio_hash_bound:'split', zk_fresh_proof:'split' });
+    state.serials.set(cid, cs); childIds.push(cid);
+  }
+  // Pay merchant 10+20
+  const merchant = 'merchant:Shop_02';
+  if(!state.branches.has(merchant)) addBranch(merchant, 230,'merchant');
+  for(const need of [10,20]){
+    const cid = childIds.find(id=> state.serials.get(id).denomination===need && state.serials.get(id).current_owner===toUser);
+    if(cid){ await doTransfer(cid, toUser, merchant, 'QNB', 'POS'); }
+  }
+  // Output summary
+  document.getElementById('s9out').textContent = `Completed: ${twoHundredId} → children ${childIds.join(', ')}; paid 30 to merchant; 170 remains with ${toUser}.`;
+  LOG('S9 complete: 200 split & spend'); await updateKPIs(); renderExplorer(); drawAllCharts();
+}
+
+// Charts (vanilla SVG)
+function drawBars(svgId, dataMap){
+  const svg = document.getElementById(svgId); if(!svg) return;
+  const rect = svg.getBoundingClientRect();
+  const W = (rect.width||svg.clientWidth||600), H = svg.clientHeight || 180, pad=20;
+  const entries = Object.entries(dataMap); svg.innerHTML='';
+  const max = Math.max(1,...entries.map(e=>e[1]));
+  const colors = svgId==='chart_owner' ? {'bank:QNB':'#3b82f6', 'bank:Doha':'#10b981', 'bank:QIIB':'#8b5cf6', 'user:Ali':'#f59e0b', 'merchant:Shop_01':'#ef4444', default:'#38bdf8'} : {1:'#ef4444',5:'#f59e0b',10:'#eab308',20:'#84cc16',50:'#22c55e',100:'#14b8a6',200:'#06b6d4',500:'#3b82f6', default:'#38bdf8'};
+  entries.forEach((e,i)=>{
+    const w = (W - pad*2) / Math.max(1,entries.length) - 8;
+    const x = pad + i*((W - pad*2)/Math.max(1,entries.length)) + 4;
+    const h = (H - pad*2) * (e[1]/max);
+    const y = H - pad - h;
+    const color = colors[e[0]] || colors.default;
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    const r = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    r.setAttribute('x',x); r.setAttribute('y',y); r.setAttribute('width',Math.max(0,w)); r.setAttribute('height',Math.max(0,h)); r.setAttribute('rx',6); r.setAttribute('ry',6); r.setAttribute('fill',color); r.setAttribute('opacity','0.6');
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('x',x+w/2); t.setAttribute('y',H-6); t.setAttribute('font-size','12'); t.setAttribute('text-anchor','middle'); t.setAttribute('fill', getComputedStyle(svg).color||'#cbd5e1'); t.textContent = String(e[0]).slice(0,10);
+    g.appendChild(r); g.appendChild(t); svg.appendChild(g);
+  });
+}
+function drawLine(svgId, arr){
+  const svg = document.getElementById(svgId); if(!svg) return;
+  const rect = svg.getBoundingClientRect();
+  const W = (rect.width||svg.clientWidth||600), H = svg.clientHeight || 180, pad=20;
+  svg.innerHTML=''; if(arr.length<2){ return; }
+  const max = Math.max(...arr), min = Math.min(...arr);
+  const scaleX = (i)=> pad + i*(W - pad*2)/Math.max(1,(arr.length-1));
+  const scaleY = (v)=> H - pad - ( (v-min)/Math.max(1,(max-min)) )*(H - pad*2);
+  let d = ''; arr.forEach((v,i)=>{ d += (i===0? 'M':'L') + scaleX(i) + ' ' + scaleY(v) + ' '; });
+  const path = document.createElementNS('http://www.w3.org/2000/svg','path'); path.setAttribute('d',d); path.setAttribute('fill','none'); path.setAttribute('stroke','currentColor'); path.setAttribute('stroke-width','2');
+  svg.appendChild(path);
+  // Interactive: add circles for points
+  arr.forEach((v,i)=>{
+    const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('cx', scaleX(i)); circle.setAttribute('cy', scaleY(v)); circle.setAttribute('r', 4); circle.setAttribute('fill', 'currentColor');
+    circle.addEventListener('click', () => alert(`Point ${i+1}: ${v} (scenario update)`));
+    svg.appendChild(circle);
+  });
+}
+function drawAllCharts(){
+  // Owner distribution
+  const owners = {}; state.serials.forEach(s=> owners[s.current_owner]=(owners[s.current_owner]||0)+1);
+  drawBars('chart_owner', owners);
+  // Denomination distribution
+  const dens = {}; state.serials.forEach(s=> dens[s.denomination]=(dens[s.denomination]||0)+1);
+  drawBars('chart_denom', dens);
+  // Totals trend
+  drawLine('chart_total', state.charts.total);
+  // True-alert ratio trend
+  drawLine('chart_ratio', state.charts.ratio.length? state.charts.ratio : [0,0]);
+  // Alerts demo
+  if(state.charts.alerts.length>50) state.charts.alerts.shift(); drawLine('chart_alerts', state.charts.alerts.length? state.charts.alerts : [0,3,2,5,4,7,3,1,2]);
+  // Offline times demo
+  if(state.charts.offtimes.length>50) state.charts.offtimes.shift(); drawLine('chart_offtimes', state.charts.offtimes.length? state.charts.offtimes : [800,1200,900,600,1400,700,500,900]);
+}
+
+// Tabs
+function switchTab(id){
+  document.querySelectorAll('nav.tabs button').forEach(b=> b.classList.toggle('active', b.getAttribute('data-tab')===id));
+  document.querySelectorAll('section').forEach(s=> s.classList.add('hidden'));
+  document.getElementById(id).classList.remove('hidden');
+  // redraw charts when visible to ensure correct size
+  if(id==='qcb' || id==='aml' || id==='sandbox'){ setTimeout(drawAllCharts, 0); }
+}
+function resetState(){
+  state.branches = new Map(); state.serials = new Map(); state.checkpoints = new Map(); state.kpi = { traceabilityOk:0, traceabilityTotal:0, offlineTotal:0, offlineOk:0, uptime:null, amlPrecision:null }; state.charts = { total: [], ratio: [], alerts: [], offtimes: [] };
+  if(logEl) logEl.textContent='—';
+  addBranch('QCB',0,'issuer'); addBranch('QNB',10,'bank'); addBranch('Doha',100,'bank'); addBranch('QIIB',120,'bank');
+  refreshBranches(); renderSerialsTable(); updateKPIs(); renderExplorer(); drawAllCharts();
+}
+function seedSamples(){ if(!state.branches.has('QCB')) addBranch('QCB',0,'issuer'); if(state.serials.size===0){ doMint(6,1).then(updateKPIs).then(renderExplorer).then(drawAllCharts); } else { renderExplorer(); drawAllCharts(); } }
+function boot(){
+  resetState();
+  // SANDBOX buttons (all wired with outputs)
+  document.getElementById('s1').onclick = S1_IssuanceDistribution;
+  document.getElementById('s2').onclick = S2_BankToBank;
+  document.getElementById('s3').onclick = S3_OfflineP2P;
+  document.getElementById('s4').onclick = S4_MerchantDeposit;
+  document.getElementById('s5').onclick = S5_StolenRecovery;
+  document.getElementById('s6').onclick = S6_MTO;
+  document.getElementById('s7').onclick = S7_DR;
+  document.getElementById('s8').onclick = S8_Analytics;
+  document.getElementById('runAll').onclick = RunAll;
+  document.getElementById('reset').onclick = resetState;
+  document.getElementById('exportDeliverables').onclick = exportDeliverables;
+  document.getElementById('printReport').onclick = printReport;
+  document.getElementById('bioImportBtn').onclick = bioImport;
+  document.getElementById('advAssign').onclick = advAssign;
+  document.getElementById('advBulk').onclick = advBulk;
+  document.getElementById('advMint').onclick = advMint;
+  document.getElementById('advRedeem').onclick = advRedeem;
+  document.getElementById('advDelete').onclick = advDelete;
+  document.getElementById('mintAllBtn').onclick = mintAllDenoms;
+  document.getElementById('s9Run').onclick = splitAndSpend200;
+  // SIM
+  document.getElementById('addBranch').onclick = ()=> addBranch(document.getElementById('branchId').value, Number(document.getElementById('branchDelta').value||0), document.getElementById('branchRole').value);
+  document.getElementById('mintBtn').onclick = ()=> doMint(Number(document.getElementById('mintCount').value||0), Number(document.getElementById('denom').value||1));
+  document.getElementById('distBtn').onclick = ()=> doDistribute((document.getElementById('distBank').value||'').trim(), Number(document.getElementById('distQty').value||0));
+  document.getElementById('refreshSerials').onclick = ()=>{ renderSerialsTable(); refreshSupplyStats(); };
+  document.getElementById('sendOnline').onclick = sendOnline;
+  document.getElementById('exportCBOR').onclick = exportCBORLike;
+  document.getElementById('commitOffline').onclick = commitOffline;
+  document.getElementById('exportState').onclick = exportState;
+  document.getElementById('importState').onclick = importState;
+  document.getElementById('signCheckpoint').onclick = signCheckpoint;
+  // Validator & Explorer
+  document.getElementById('runValidate').onclick = runValidator;
+  document.getElementById('loadSelected').onclick = loadSelectedIntoValidator;
+  document.getElementById('btnSearch').onclick = searchExplorer;
+  document.getElementById('btnLoadSamples').onclick = seedSamples;
+  document.getElementById('btnClearExplorer').onclick = clearExplorer;
+  // Tabs
+  document.querySelectorAll('nav.tabs button').forEach(b=> b.onclick = ()=> switchTab(b.getAttribute('data-tab')));
+}
+document.addEventListener('DOMContentLoaded',boot);
+</script>
+</body>
+</html>

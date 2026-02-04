@@ -16,6 +16,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
   <!-- Font Awesome for Icons -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" rel="stylesheet" />
+  <!-- Shared product theme -->
+  <link href="shared-ui.css" rel="stylesheet" />
   <!-- DOMPurify for Sanitization -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" defer></script>
   <!-- PWA Manifest -->
@@ -23,32 +25,36 @@
   <meta name="theme-color" content="#007bff" />
   <style>
     body {
-      font-family: 'Roboto', sans-serif;
-      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
-      color: #ffffff;
+      font-family: var(--app-font-sans);
+      background: var(--app-body-bg);
+      color: var(--app-ink);
       transition: background 0.3s;
     }
-    .dark-mode {
-      background: linear-gradient(135deg, #121212, #1e1e1e, #333);
+    body.dark-mode {
+      --app-bg-1: #0b0b0f;
+      --app-bg-2: #151827;
+      --app-bg-3: #0c0f18;
+      --app-panel: rgba(10,12,18,.85);
+      --app-border: rgba(234,240,255,.10);
     }
         /* === Stat boxes for Bio-IBAN & Balance === */
     .stat-box{
-      border:1px solid rgba(255,255,255,.20);
+      border:1px solid var(--app-border);
       border-radius:12px;
       padding:12px 16px;
-      background:rgba(255,255,255,.04);
+      background:var(--app-panel);
     }
     .stat-label{ font-weight:600; opacity:.9; }
     .stat-value{
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Courier New", monospace;
+      font-family: var(--app-font-mono);
       word-break: break-all;
     }
     .card {
-      background: rgba(255,255,255,0.05);
-      border: none;
-      border-radius: 20px;
-      backdrop-filter: blur(15px);
-      box-shadow: 0 8px 32px rgba(0,0,0,0.37);
+      background: var(--app-panel);
+      border: 1px solid var(--app-border);
+      border-radius: var(--app-radius);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--app-shadow);
       transition: transform 0.3s ease;
     }
     .card:hover { transform: scale(1.02); }
@@ -63,7 +69,7 @@
     }
     .section { display: none; padding: 50px 0; animation: fadeIn 0.8s ease-in; }
     .active-section { display: block; }
-    .landing { text-align: center; padding: 25vh 0; }
+    .landing { text-align: center; padding: 16vh 0 10vh; min-height: calc(100vh - 64px); }
     .whitepaper {
       background: rgba(0,0,0,0.6);
       padding: 25px;
@@ -86,10 +92,10 @@
     #lockedScreen { display: block; text-align: center; padding-top: 20vh; }
     #vaultUI { display: none; }
     .hidden { display: none; }
-    #biovault:has(#vaultUI:not(.hidden)) > .lead,
-    #biovault:has(#vaultUI:not(.hidden)) #lockedTitle,
-    #biovault:has(#vaultUI:not(.hidden)) #enterVaultBtn,
-    #biovault:has(#vaultUI:not(.hidden)) > h2.neon-text {
+    #biovault.vault-open > .lead,
+    #biovault.vault-open #lockedTitle,
+    #biovault.vault-open #enterVaultBtn,
+    #biovault.vault-open > h2.neon-text {
       display: none;
     }
     @media (max-width: 991.98px) {
@@ -112,7 +118,7 @@
     .navbar-collapse.show {
       padding-bottom: 1rem; /* Space below menu items */
     }
-    body {
+    .has-fixed-nav {
       padding-top: 56px; /* Height of navbar (adjust if needed) */
     }
     #biovault {
@@ -122,9 +128,9 @@
     table { width: 100%; }
     /* Modal theme matching PWA */
     .modal-content {
-      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
-      color: #ffffff;
-      border: none;
+      background: var(--app-panel-2);
+      color: var(--app-ink);
+      border: 1px solid var(--app-border);
     }
     .modal-header {
       border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -134,15 +140,15 @@
     }
     .form-control {
       background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.2);
-      color: #ffffff;
+      border: 1px solid var(--app-border);
+      color: var(--app-ink);
     }
     .form-control:focus {
       border-color: #007bff;
       box-shadow: 0 0 0 0.25rem rgba(0,123,255,0.25);
     }
     .form-label {
-      color: #ffffff;
+      color: var(--app-ink);
     }
     .btn-close {
       filter: invert(1);
@@ -150,6 +156,31 @@
     .modal-dialog {
       max-width: 90%; /* Larger size for better usability */
     }
+
+  .center-action {
+  display: flex;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+.action-btn {
+  width: min(90%, 420px);   /* متجاوب مع الشاشة */
+  text-align: center;
+  padding: 14px 0;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #0d6efd, #3b82f6);
+  box-shadow: 0 10px 25px rgba(59,130,246,0.35);
+  transition: all 0.25s ease;
+}
+
+.action-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 35px rgba(59,130,246,0.55);
+}
+  
   </style>
   <!-- Safe stubs so inline onclicks don't crash before app boots -->
   <script>
@@ -159,7 +190,7 @@
     window.addEventListener('error', e => console.error('[BioVault] Uncaught:', e.error || e.message));
   </script>
 </head>
-<body>
+<body class="has-fixed-nav">
   <noscript><div class="alert alert-danger m-3">This app requires JavaScript.</div></noscript>
   <!-- Global Navbar -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-transparent fixed-top" role="navigation" aria-label="Main navigation">
@@ -254,12 +285,14 @@
         <button id="catchOutBtn" class="btn btn-success" type="button">Catch Out</button>
       </div>
       <h4>Transaction History</h4>
-      <table class="table table-dark table-striped">
-        <thead>
-          <tr><th>Bio-IBAN</th><th>Bio-Catch</th><th>Amount (TVM)</th><th>Date/Time</th><th>Status</th></tr>
-        </thead>
-        <tbody id="transactionHistory"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table class="table table-dark table-striped">
+          <thead>
+            <tr><th>Bio-IBAN</th><th>Bio-Catch</th><th>Amount (TVM)</th><th>Date/Time</th><th>Status</th></tr>
+          </thead>
+          <tbody id="transactionHistory"></tbody>
+        </table>
+      </div>
       <div class="d-flex flex-wrap gap-2 my-3">
         <button class="btn btn-outline-light" type="button" onclick="exportTransactions()">Export Transactions</button>
         <button class="btn btn-outline-light" type="button" onclick="backupVault()">Backup Vault</button>
@@ -292,22 +325,11 @@
         <li>Superiority: Unlimited scalability, proactive crime prevention, meets global AML standards.</li>
       </ul>
       <p>Example Use Case: For any currency (e.g., USD, Euro, Riyal), BalanceChain SCL makes every unit traceable—cash or digital—preventing crime and enabling smooth CBDC transition.</p>
-      <a href="mailto:support@biovault.app?subject=Request%20for%20SCL%20Demo&body=Hi%20team%2C%0A%0AI%20am%20interested%20in%20the%20SCL%20demo.%20Please%20contact%20me%20with%20more%20details.%0A%0AMy%20name%3A%20%5BYour%20Name%5D%0AMy%20email%3A%20%5BYour%20Email%5D%0AMy%20phone%3A%20%5BYour%20Phone%5D%0ACompany%2FOrganization%3A%20%5BOptional%5D%0A%0ABest%20regards%2C%0A%5BYour%20Name%5D" class="btn btn-secondary w-100" role="button" aria-label="Request SCL Demo">
-        <i class="fas fa-info-circle me-2" aria-hidden="true"></i> Request SCL Demo
-      </a>
-      <p class="mt-3 small">If the email client does not open automatically, copy the message below and send it to support@biovault.app</p>
-      <textarea id="demoMessage" class="form-control" rows="8">Hi team,
-
-I am interested in the SCL demo. Please contact me with more details.
-
-My name: [Your Name]
-My email: [Your Email]
-My phone: [Your Phone]
-Company/Organization: [Optional]
-
-Best regards,
-[Your Name]</textarea>
-      <button class="btn btn-outline-light mt-2 w-100" type="button" onclick="copyToClipboard('demoMessage')">Copy Message</button>
+<div class="center-action">
+  <a href="scl-demo.html" class="action-btn">
+    CBDC DEMO
+  </a>
+</div>
     </div>
     <button class="btn btn-outline-light back-btn w-100" type="button" onclick="showSection('landing')">
       <i class="fas fa-arrow-left me-2" aria-hidden="true"></i> Back
@@ -317,9 +339,9 @@ Best regards,
   <section id="dashboard" class="section container fade-in" aria-label="Blockchain Dashboard">
     <h2 class="neon-text">TVM Blockchain Dashboard (Gateway to DLT)</h2>
     <p class="lead">Connect your wallet and interact with the TVM contract for claims, swaps, and exchanges. Fixed at 12 SHE per TVM with dynamic pricing. Serves as gateway for both MSL and SCL versions. Actions auto-populate from BalanceChain proofs for seamless UX—just click buttons.</p>
-    <button id="connect-wallet" class="btn btn-warning btn-lg w-100 mb-4" type="button">
-      <i class="fas fa-wallet me-2" aria-hidden="true"></i> Connect Wallet
-    </button>
+<a href="demos/tvm-wallet.html" class="btn btn-warning w-100" id="openWalletDemo">
+  <span style="margin-right:10px">💼</span> Balancechain explorer
+</a>
     <p id="wallet-address" class="text-center" aria-live="polite"></p>
     <!-- Overview Metrics -->
     <div class="row mb-4">
@@ -407,12 +429,14 @@ Best regards,
       </div>
     </div>
     <!-- Layer Reserves Table -->
-    <table class="table table-dark table-striped mt-4">
-      <thead>
-        <tr><th>Layer</th><th>Reserve (TVM)</th><th>Cap Progress</th><th>Actions</th></tr>
-      </thead>
-      <tbody id="layer-table"><!-- JS Populated --></tbody>
-    </table>
+    <div class="table-wrap mt-4">
+      <table class="table table-dark table-striped">
+        <thead>
+          <tr><th>Layer</th><th>Reserve (TVM)</th><th>Cap Progress</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="layer-table"><!-- JS Populated --></tbody>
+      </table>
+    </div>
     <button class="btn btn-outline-light back-btn w-100" type="button" onclick="showSection('landing')">
       <i class="fas fa-arrow-left me-2" aria-hidden="true"></i> Back
     </button>

@@ -792,8 +792,10 @@ function revealVaultUI() {
   if (wp) wp.classList.add('hidden');
   var locked = document.getElementById('lockedScreen');
   var vault = document.getElementById('vaultUI');
+  var section = document.getElementById('biovault');
   if (locked) locked.classList.add('hidden');
   if (vault) { vault.classList.remove('hidden'); vault.style.display = 'block'; }
+  if (section) section.classList.add('vault-open');
   try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'true'); } catch(e){}
 }
 function restoreLockedUI() {
@@ -801,8 +803,10 @@ function restoreLockedUI() {
   if (wp) wp.classList.remove('hidden');
   var locked = document.getElementById('lockedScreen');
   var vault = document.getElementById('vaultUI');
+  var section = document.getElementById('biovault');
   if (vault) { vault.classList.add('hidden'); vault.style.display = 'none'; }
   if (locked) locked.classList.remove('hidden');
+  if (section) section.classList.remove('vault-open');
   try { localStorage.setItem(VAULT_UNLOCKED_KEY, 'false'); } catch(e){}
 }
 // ---------- Time/Caps Helpers ----------
@@ -1903,6 +1907,7 @@ function showSection(id) {
     var wp = document.querySelector('#biovault .whitepaper'); if (wp) wp.classList.add('hidden');
     var vu = document.getElementById('vaultUI'); if (vu) vu.classList.remove('hidden');
     var ls = document.getElementById('lockedScreen'); if (ls) ls.classList.add('hidden');
+    var section = document.getElementById('biovault'); if (section) section.classList.add('vault-open');
   }
 }
 window.showSection = showSection; // expose for nav
