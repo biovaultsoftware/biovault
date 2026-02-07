@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>BalanceChain Explorer</title>
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <!-- Prevent favicon 404 noise -->
   <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -227,9 +227,13 @@
       <h1>BalanceChain Explorer</h1>
       <div class="subtitle">State-only explorer (accounts + segments). Shows unlocked vs expected vs remaining + next unlock. Optional cross-check nodes.</div>
     </div>
-    <div class="pill" id="topPill">
+    <div class="row align-center gap-8">
+      <a class="pill" href="../index.html">Back to Home</a>
+      <button class="pill" id="themeToggle" type="button">Theme</button>
+      <div class="pill" id="topPill">
       <span class="dot warn"></span>
       <span id="topStatus">Loading…</span>
+    </div>
     </div>
   </header>
 
@@ -335,6 +339,25 @@ https://backup-node.workers.dev"></textarea>
 </div>
 
 <script>
+  (function(){
+    var key = 'bc-theme';
+    function applyTheme(t){
+      document.body.classList.toggle('theme-light', t === 'light');
+      document.body.classList.toggle('theme-dark', t === 'dark');
+      var btn = document.getElementById('themeToggle');
+      if (btn) btn.textContent = t === 'dark' ? 'Dark' : 'Light';
+    }
+    var saved = localStorage.getItem(key) || 'dark';
+    applyTheme(saved);
+    var toggle = document.getElementById('themeToggle');
+    if (toggle) {
+      toggle.addEventListener('click', function(){
+        var next = document.body.classList.contains('theme-light') ? 'dark' : 'light';
+        localStorage.setItem(key, next);
+        applyTheme(next);
+      });
+    }
+  })();
 /**
  * PRIMARY NODE (HARDCODED + INVISIBLE)
  * - Not rendered anywhere in the UI.

@@ -36,6 +36,29 @@ body{
   font-family:var(--app-font-sans);
 }
 
+body.theme-light{
+  --app-bg-1:#f4f7ff;
+  --app-bg-2:#eef3ff;
+  --app-bg-3:#f9fbff;
+  --app-panel:rgba(255,255,255,.85);
+  --app-panel-2:rgba(255,255,255,.95);
+  --app-ink:#0b1220;
+  --app-muted:rgba(11,18,32,.65);
+  --app-muted-2:rgba(11,18,32,.55);
+  --app-accent:#3b82f6;
+  --app-accent-2:#10b981;
+  --app-good:#16a34a;
+  --app-warn:#d97706;
+  --app-bad:#dc2626;
+  --app-border:rgba(10,20,40,.12);
+  --app-shadow:0 16px 40px rgba(10,20,40,.10);
+  --app-body-bg:
+    radial-gradient(1000px 700px at 15% -10%, rgba(59,130,246,.12), transparent 60%),
+    radial-gradient(900px 650px at 90% 0%, rgba(16,185,129,.10), transparent 55%),
+    radial-gradient(800px 600px at 50% 110%, rgba(59,130,246,.08), transparent 60%),
+    linear-gradient(180deg,var(--app-bg-1),var(--app-bg-3));
+}
+
 a{color:var(--app-accent)}
 a:hover{color:var(--app-accent);filter:brightness(1.08)}
 
@@ -91,6 +114,7 @@ input,select,textarea,button{
 .gap-8{gap:8px}
 .gap-10{gap:10px}
 .gap-12{gap:12px}
+.space{justify-content:space-between}
 .flex-1{flex:1}
 .align-start{align-items:flex-start}
 .align-center{align-items:center}
@@ -121,6 +145,10 @@ input,select,textarea,button{
 .alert-danger{
   border-color:rgba(255,90,90,.45);
   color:#ffd5d5;
+}
+body.theme-light .alert-danger{
+  color:#7f1d1d;
+  border-color:rgba(220,38,38,.35);
 }
 
 .badge,

@@ -22,7 +22,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" defer></script>
   <!-- PWA Manifest -->
   <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#007bff" />
+  <meta name="theme-color" content="#0b1220" />
   <style>
     body {
       font-family: var(--app-font-sans);
@@ -30,13 +30,7 @@
       color: var(--app-ink);
       transition: background 0.3s;
     }
-    body.dark-mode {
-      --app-bg-1: #0b0b0f;
-      --app-bg-2: #151827;
-      --app-bg-3: #0c0f18;
-      --app-panel: rgba(10,12,18,.85);
-      --app-border: rgba(234,240,255,.10);
-    }
+    body.dark-mode { }
         /* === Stat boxes for Bio-IBAN & Balance === */
     .stat-box{
       border:1px solid var(--app-border);
@@ -284,8 +278,8 @@
           <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('scl')">SCL Overview</a></li>
           <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('dashboard')">Dashboard</a></li>
           <li class="nav-item">
-            <button id="theme-toggle" class="btn btn-outline-light ms-2" type="button" aria-pressed="false">Dark Mode</button>
-          </li>
+          <button id="theme-toggle" class="btn btn-outline-light ms-2" type="button" aria-pressed="false">Theme</button>
+        </li>
         </ul>
       </div>
     </div>
@@ -640,6 +634,32 @@
   <!-- 🔼🔼🔼 End modals 🔼🔼🔼 -->
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
+  <!-- Theme -->
+  <script>
+    (function(){
+      var key = 'bc-theme';
+      var root = document.body;
+      function applyTheme(t){
+        root.classList.toggle('theme-light', t === 'light');
+        root.classList.toggle('theme-dark', t === 'dark');
+        var btn = document.getElementById('theme-toggle');
+        if (btn) {
+          btn.setAttribute('aria-pressed', t === 'dark' ? 'true' : 'false');
+          btn.textContent = t === 'dark' ? 'Dark' : 'Light';
+        }
+      }
+      var saved = localStorage.getItem(key) || 'dark';
+      applyTheme(saved);
+      var toggle = document.getElementById('theme-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', function(){
+          var next = document.body.classList.contains('theme-light') ? 'dark' : 'light';
+          localStorage.setItem(key, next);
+          applyTheme(next);
+        });
+      }
+    })();
+  </script>
   <!-- Boot loader: load Ethers with fallback, then load main.js -->
   <script>
     (function () {
