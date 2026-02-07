@@ -55,6 +55,17 @@ body.theme-light{
   --app-body-bg:linear-gradient(180deg,var(--app-bg-1),var(--app-bg-3));
 }
 
+body.theme-light .card,
+body.theme-light .cardX{
+  background:var(--app-panel);
+  border-color:rgba(15,23,42,.12);
+}
+
+body.theme-light .muted,
+body.theme-light .muted2{
+  color:rgba(11,18,32,.65);
+}
+
 a{color:var(--app-accent)}
 a:hover{color:var(--app-accent);filter:brightness(1.08)}
 
