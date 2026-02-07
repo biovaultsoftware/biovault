@@ -37,26 +37,22 @@ body{
 }
 
 body.theme-light{
-  --app-bg-1:#f4f7ff;
-  --app-bg-2:#eef3ff;
-  --app-bg-3:#f9fbff;
-  --app-panel:rgba(255,255,255,.85);
-  --app-panel-2:rgba(255,255,255,.95);
+  --app-bg-1:#f7f8fb;
+  --app-bg-2:#f1f3f8;
+  --app-bg-3:#eef1f6;
+  --app-panel:#ffffff;
+  --app-panel-2:#f8fafc;
   --app-ink:#0b1220;
   --app-muted:rgba(11,18,32,.65);
   --app-muted-2:rgba(11,18,32,.55);
-  --app-accent:#3b82f6;
-  --app-accent-2:#10b981;
+  --app-accent:#2563eb;
+  --app-accent-2:#0ea5e9;
   --app-good:#16a34a;
   --app-warn:#d97706;
   --app-bad:#dc2626;
-  --app-border:rgba(10,20,40,.12);
-  --app-shadow:0 16px 40px rgba(10,20,40,.10);
-  --app-body-bg:
-    radial-gradient(1000px 700px at 15% -10%, rgba(59,130,246,.12), transparent 60%),
-    radial-gradient(900px 650px at 90% 0%, rgba(16,185,129,.10), transparent 55%),
-    radial-gradient(800px 600px at 50% 110%, rgba(59,130,246,.08), transparent 60%),
-    linear-gradient(180deg,var(--app-bg-1),var(--app-bg-3));
+  --app-border:rgba(15,23,42,.12);
+  --app-shadow:0 6px 18px rgba(15,23,42,.08);
+  --app-body-bg:linear-gradient(180deg,var(--app-bg-1),var(--app-bg-3));
 }
 
 a{color:var(--app-accent)}
@@ -95,6 +91,11 @@ input,select,textarea,button{
 .btn-soft{
   background:linear-gradient(180deg, rgba(106,168,255,.22), rgba(106,168,255,.08));
   border:1px solid var(--app-border);
+  color:var(--app-ink);
+}
+body.theme-light .btn-soft{
+  background:linear-gradient(180deg, rgba(37,99,235,.14), rgba(37,99,235,.04));
+  border-color:rgba(15,23,42,.14);
   color:var(--app-ink);
 }
 
@@ -150,6 +151,22 @@ body.theme-light .alert-danger{
   color:#7f1d1d;
   border-color:rgba(220,38,38,.35);
 }
+body.theme-light .alert-success{
+  color:#14532d;
+  border-color:rgba(22,163,74,.35);
+}
+body.theme-light .alert-warning{
+  color:#7c2d12;
+  border-color:rgba(217,119,6,.35);
+}
+body.theme-light .alert-info{
+  color:#0b3866;
+  border-color:rgba(37,99,235,.35);
+}
+body.theme-light .card,
+body.theme-light .cardX{
+  box-shadow:var(--app-shadow);
+}
 
 .badge,
 .badge.bg-secondary,
@@ -160,5 +177,12 @@ body.theme-light .alert-danger{
   border:1px solid var(--app-border);
   color:var(--app-ink);
   font-weight:600;
+}
+body.theme-light .badge,
+body.theme-light .badge.bg-secondary,
+body.theme-light .badge.bg-info,
+body.theme-light .badge.bg-warning,
+body.theme-light .badge.bg-success{
+  background:rgba(15,23,42,.06) !important;
 }
 .mb-10{margin-bottom:10px}
