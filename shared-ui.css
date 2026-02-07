@@ -23,6 +23,11 @@
     radial-gradient(800px 600px at 50% 110%, rgba(47,230,124,.10), transparent 60%),
     linear-gradient(180deg,var(--app-bg-1),var(--app-bg-3));
   --app-focus-ring:0 0 0 3px rgba(106,168,255,.45);
+  --app-space-1:8px;
+  --app-space-2:12px;
+  --app-space-3:16px;
+  --app-space-4:24px;
+  --app-space-5:32px;
 }
 
 body{
@@ -32,6 +37,7 @@ body{
 }
 
 a{color:var(--app-accent)}
+a:hover{color:var(--app-accent);filter:brightness(1.08)}
 
 .card,
 .cardX{
@@ -63,6 +69,68 @@ input,select,textarea,button{
   border-radius:12px;
 }
 
+.btn-soft{
+  background:linear-gradient(180deg, rgba(106,168,255,.22), rgba(106,168,255,.08));
+  border:1px solid var(--app-border);
+  color:var(--app-ink);
+}
+
+.mt-0{margin-top:0}
+.mt-6{margin-top:6px}
+.mt-8{margin-top:8px}
+.mt-10{margin-top:10px}
+.mt-12{margin-top:12px}
+.mt-14{margin-top:14px}
+.mt-16{margin-top:16px}
+.mt-22{margin-top:22px}
+.mb-0{margin-bottom:0}
+.mb-8{margin-bottom:8px}
+.mb-6{margin-bottom:6px}
+.my-8{margin:8px 0}
+.ml-8{margin-left:8px}
+.gap-8{gap:8px}
+.gap-10{gap:10px}
+.gap-12{gap:12px}
+.flex-1{flex:1}
+.align-start{align-items:flex-start}
+.align-center{align-items:center}
+.text-right{text-align:right}
+.text-center{text-align:center}
+.minw-90{min-width:90px}
+.minw-160{min-width:160px}
+.minw-360{min-width:360px}
+.maxw-180{max-width:180px}
+.w-160{width:160px}
+.pre-wrap{white-space:pre-wrap}
+.h3-sm{margin:0 0 10px 0;font-size:14px}
+.h3-sm-tight{margin:14px 0 8px 0;font-size:14px}
+.pre-muted{color:var(--app-muted)}
+.bar > i{width:var(--bar-w,0%)}
+
 .has-fixed-nav{
   padding-top:64px;
 }
+
+.alert{
+  background:var(--app-panel-2);
+  border:1px solid var(--app-border);
+  color:var(--app-ink);
+  box-shadow:var(--app-shadow);
+}
+
+.alert-danger{
+  border-color:rgba(255,90,90,.45);
+  color:#ffd5d5;
+}
+
+.badge,
+.badge.bg-secondary,
+.badge.bg-info,
+.badge.bg-warning,
+.badge.bg-success{
+  background:rgba(255,255,255,.08) !important;
+  border:1px solid var(--app-border);
+  color:var(--app-ink);
+  font-weight:600;
+}
+.mb-10{margin-bottom:10px}
