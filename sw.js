@@ -149,7 +149,7 @@ if (self.workbox && __workboxLoaded) {
   );
 
   // ------- Offline fallbacks -------
-  routing.setCatch(async ({ event }) => {
+  routing.setCatchHandler(async ({ event }) => {
     if (event.request.destination === 'document') {
       // Try a precached offline page if available
       const cache = await caches.open(core.cacheNames.precache);
