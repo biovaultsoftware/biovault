@@ -948,6 +948,75 @@ async function splitAndSpend200(){
   LOG('S9 complete: 200 split & spend'); await updateKPIs(); renderExplorer(); drawAllCharts();
 }
 
+// Timeline Lite (drag & drop transfers)
+function ownerForBranch(b){
+  if(!b) return '';
+  if(b.role==='bank') return 'bank:'+b.id;
+  if(b.role==='issuer') return b.id;
+  return b.id;
+}
+function buildTimelineLite(){
+  const wrap = document.getElementById('timelineLite');
+  if(!wrap) return;
+  wrap.innerHTML = '';
+  const branches = Array.from(state.branches.values());
+  if(branches.length===0){ wrap.innerHTML = '<div class="muted">No branches available.</div>'; return; }
+  branches.forEach(b=>{
+    const ownerId = ownerForBranch(b);
+    const col = document.createElement('div');
+    col.className = 'tbranch';
+    col.dataset.branch = b.id;
+    col.dataset.owner = ownerId;
+    col.innerHTML = `<h4>${b.id}</h4>`;
+    // drop handlers
+    col.addEventListener('dragover', e=>{ e.preventDefault(); col.classList.add('drop'); });
+    col.addEventListener('dragleave', ()=> col.classList.remove('drop'));
+    col.addEventListener('drop', async e=>{
+      e.preventDefault();
+      col.classList.remove('drop');
+      const serialId = e.dataTransfer.getData('text/plain');
+      const prevOwner = e.dataTransfer.getData('owner');
+      const targetOwner = col.dataset.owner;
+      if(!serialId || !prevOwner || !targetOwner || prevOwner===targetOwner) return;
+      try{
+        await doTransfer(serialId, prevOwner, targetOwner, col.dataset.branch, 'Transfer');
+        buildTimelineLite();
+        document.getElementById('tlOut').textContent = `Transferred ${serialId} → ${targetOwner}`;
+      }catch(err){
+        document.getElementById('tlOut').textContent = 'Transfer failed: '+(err.message||err);
+      }
+    });
+    // serial pills
+    const serials = [];
+    state.serials.forEach(s=>{ if(s.current_owner===ownerId) serials.push(s); });
+    if(serials.length===0){
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = 'No serials';
+      col.appendChild(empty);
+    } else {
+      serials.slice(0,12).forEach(s=>{
+        const pill = document.createElement('div');
+        pill.className = 'tserial';
+        pill.textContent = `${s.serial_id} (${s.denomination})`;
+        pill.draggable = true;
+        pill.addEventListener('dragstart', e=>{
+          e.dataTransfer.setData('text/plain', s.serial_id);
+          e.dataTransfer.setData('owner', s.current_owner);
+        });
+        col.appendChild(pill);
+      });
+      if(serials.length>12){
+        const more = document.createElement('div');
+        more.className = 'muted';
+        more.textContent = `+${serials.length-12} more`;
+        col.appendChild(more);
+      }
+    }
+    wrap.appendChild(col);
+  });
+}
+
 // Charts (vanilla SVG)
 function drawBars(svgId, dataMap){
   const svg = document.getElementById(svgId); if(!svg) return;
@@ -1044,6 +1113,8 @@ function boot(){
   document.getElementById('advDelete').onclick = advDelete;
   document.getElementById('mintAllBtn').onclick = mintAllDenoms;
   document.getElementById('s9Run').onclick = splitAndSpend200;
+  document.getElementById('tlInit').onclick = buildTimelineLite;
+  document.getElementById('tlRefresh').onclick = buildTimelineLite;
   // SIM
   document.getElementById('addBranch').onclick = ()=> addBranch(document.getElementById('branchId').value, Number(document.getElementById('branchDelta').value||0), document.getElementById('branchRole').value);
   document.getElementById('mintBtn').onclick = ()=> doMint(Number(document.getElementById('mintCount').value||0), Number(document.getElementById('denom').value||1));
@@ -1067,6 +1138,7 @@ function boot(){
   setTimeout(function(){
     RunAll()
       .then(mintAllDenoms)
+      .then(buildTimelineLite)
       .catch(function(e){ console.error('Auto-run failed', e); });
   }, 0);
 }
