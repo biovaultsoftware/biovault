@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Privacy Policy | BalanceChain</title>
+  <meta name="color-scheme" content="light dark">
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="shared-ui.css" />
+  <style>
+    .doc-wrap{max-width:900px;margin:0 auto;padding:28px 18px 40px}
+    .doc-title{margin:0 0 6px 0;font-size:clamp(24px,3vw,34px)}
+    .doc-sub{color:var(--app-muted);margin:0 0 18px 0}
+    .doc-section{margin-top:18px}
+    .doc-section h2{font-size:16px;margin:0 0 8px 0}
+    .doc-section p, .doc-section li{color:var(--app-ink)}
+    .doc-list{margin:0;padding-left:18px}
+    .doc-footer{margin-top:24px;color:var(--app-muted);font-size:12px}
+    .doc-top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+    .doc-top a{color:var(--app-accent);text-decoration:none}
+  </style>
+</head>
+<body class="has-fixed-nav">
+  <div class="doc-wrap">
+    <div class="doc-top">
+      <div>
+        <h1 class="doc-title">Privacy Policy</h1>
+        <p class="doc-sub"><strong>Effective Date:</strong> 8 February 2026</p>
+      </div>
+      <a href="index.html">Back to Home</a>
+    </div>
+
+    <div class="doc-section">
+      <h2>1. Overview</h2>
+      <p>This Privacy Policy explains how we handle information when you use the BalanceChain Platform.</p>
+      <p>Our core principle: <strong>privacy by design</strong>.</p>
+    </div>
+
+    <div class="doc-section">
+      <h2>2. What We Do NOT Collect</h2>
+      <p>We do <strong>not</strong>:</p>
+      <ul class="doc-list">
+        <li>collect personal identity data</li>
+        <li>store biometric data on our servers</li>
+        <li>store private keys</li>
+        <li>store transaction histories centrally</li>
+        <li>track users across devices</li>
+      </ul>
+    </div>
+
+    <div class="doc-section">
+      <h2>3. Local-Only Data</h2>
+      <p>Most data is stored <strong>locally on your device</strong>, including:</p>
+      <ul class="doc-list">
+        <li>ledger segments</li>
+        <li>cryptographic proofs</li>
+        <li>biometric authentication material</li>
+        <li>vault state and backups</li>
+      </ul>
+      <p>This data never leaves your device unless <strong>you explicitly export it</strong>.</p>
+    </div>
+
+    <div class="doc-section">
+      <h2>4. On-Chain Data</h2>
+      <p>When using on-chain gateways:</p>
+      <ul class="doc-list">
+        <li>only cryptographic proofs and required transaction data are submitted</li>
+        <li>no personal identity data is included</li>
+        <li>blockchain data is public by nature and governed by the underlying network</li>
+      </ul>
+    </div>
+
+    <div class="doc-section">
+      <h2>5. Communications</h2>
+      <p>If you contact us via email:</p>
+      <ul class="doc-list">
+        <li>we receive your email address and message</li>
+        <li>we use it solely to respond</li>
+        <li>we do not sell or share communications</li>
+      </ul>
+    </div>
+
+    <div class="doc-section">
+      <h2>6. Cookies &amp; Analytics</h2>
+      <p>The Platform does <strong>not</strong> use:</p>
+      <ul class="doc-list">
+        <li>tracking cookies</li>
+        <li>behavioral analytics</li>
+        <li>advertising pixels</li>
+      </ul>
+      <p>Basic technical logs may exist at the hosting level for security and uptime.</p>
+    </div>
+
+    <div class="doc-section">
+      <h2>7. Third-Party Services</h2>
+      <p>Wallets, blockchains, and external services you choose to use are governed by their own privacy policies.</p>
+      <p>We are not responsible for third-party practices.</p>
+    </div>
+
+    <div class="doc-section">
+      <h2>8. Data Security</h2>
+      <p>Security measures include:</p>
+      <ul class="doc-list">
+        <li>local encryption</li>
+        <li>device-level access control</li>
+        <li>biometric authentication (where supported)</li>
+      </ul>
+      <p>However, no system is 100% secure.</p>
+    </div>
+
+    <div class="doc-section">
+      <h2>9. Your Choices</h2>
+      <p>You control:</p>
+      <ul class="doc-list">
+        <li>your data</li>
+        <li>backups</li>
+        <li>exports</li>
+        <li>deletions (by clearing local storage or uninstalling)</li>
+      </ul>
+      <p>We cannot recover lost data.</p>
+    </div>
+
+    <div class="doc-section">
+      <h2>10. Changes to This Policy</h2>
+      <p>We may update this Privacy Policy. Updates will be posted on this page.</p>
+    </div>
+
+    <div class="doc-section">
+      <h2>11. Contact</h2>
+      <p>Privacy questions: <a href="mailto:support@biovault.app">support@biovault.app</a></p>
+    </div>
+
+    <div class="doc-footer">© <span id="year">2026</span> BioVault Software Solutions. All rights reserved.</div>
+  </div>
+  <script>
+    (function(){
+      var y = new Date().getFullYear();
+      var el = document.getElementById('year');
+      if (el) el.textContent = String(y);
+    })();
+  </script>
+</body>
+</html>

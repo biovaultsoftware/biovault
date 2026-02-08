@@ -306,6 +306,93 @@
       color: var(--app-muted);
       font-size: 12px;
     }
+    .landing-block{
+      margin-top: 28px;
+      text-align: left;
+    }
+    .landing-block h3{
+      margin-bottom: 10px;
+      font-size: 16px;
+    }
+    .landing-grid{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .landing-list{
+      margin: 0;
+      padding-left: 18px;
+      color: var(--app-muted);
+    }
+    .landing-flow{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .landing-card{
+      padding: 14px 16px;
+      border: 1px solid var(--app-border);
+      border-radius: 12px;
+      background: var(--app-panel);
+      box-shadow: var(--app-shadow);
+    }
+    .landing-table{
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--app-border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .landing-table th,
+    .landing-table td{
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--app-border);
+      text-align: left;
+      vertical-align: top;
+    }
+    .landing-table th{
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      color: var(--app-muted);
+      background: rgba(255,255,255,.03);
+    }
+    .landing-cta{
+      margin-top: 16px;
+      display: flex;
+      justify-content: center;
+    }
+    .landing-cta .btn{
+      min-width: 320px;
+    }
+    .app-footer .footer-grid{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      text-align: left;
+      margin-bottom: 12px;
+    }
+    .app-footer a{
+      color: var(--app-muted);
+      text-decoration: none;
+    }
+    .app-footer a:hover{
+      color: var(--app-ink);
+    }
+    @media (max-width: 900px){
+      .landing-grid,
+      .landing-flow,
+      .app-footer .footer-grid{
+        grid-template-columns: 1fr;
+      }
+      .landing-cta .btn{
+        min-width: 0;
+        width: 100%;
+      }
+      .landing-block{
+        text-align: left;
+      }
+    }
     body.theme-light .navbar .nav-link:hover {
       color: #1d4ed8 !important;
     }
@@ -353,9 +440,10 @@
   <section id="landing" class="section landing active-section fade-in" aria-label="Landing">
     <div class="container">
       <h1 class="display-3 neon-text">BalanceChain Value Transfer Ecosystem</h1>
+      <p class="small muted2 mt-6">Protocol Interface · Infrastructure Layer · Jurisdiction-Aware</p>
       <p class="lead">
         <strong>Choose Your Path: Off-Chain or On-Chain</strong><br />
-        BalanceChain is an instant, offline-capable value transfer system enabling zero-fee peer-to-peer transactions.<br />
+        BalanceChain is an instant, offline-capable value transfer system designed to enable zero-fee peer-to-peer transactions.<br />
         It operates through a human-centric economic framework (SHE/ECF) with an optional on-chain TVM gateway.
       </p>
       <div class="row justify-content-center mt-5 landing-buttons">
@@ -376,6 +464,79 @@
         </div>
       </div>
       <p class="small muted2 mt-10">This interface presents protocol pathways. Availability and deployment depend on jurisdiction and integration context.</p>
+      <div class="landing-block">
+        <h3>Who This Interface Is For</h3>
+        <div class="landing-grid">
+          <div class="landing-card">
+            <strong>Individuals &amp; Communities</strong>
+            <p class="mt-6 muted">Secure, offline-capable peer-to-peer value transfer using BioVault (MSL).</p>
+          </div>
+          <div class="landing-card">
+            <strong>Institutions &amp; Regulators</strong>
+            <p class="mt-6 muted">Centralized ledger models for CBDC–fiat twins, traceability, and controlled deployment (SCL).</p>
+          </div>
+          <div class="landing-card">
+            <strong>Developers &amp; Integrators</strong>
+            <p class="mt-6 muted">On-chain interoperability via the TVM gateway for settlement, swaps, and external systems.</p>
+          </div>
+        </div>
+      </div>
+      <div class="landing-block">
+        <h3>How BalanceChain Works</h3>
+        <div class="landing-flow">
+          <div class="landing-card">
+            <strong>Create &amp; Hold Value (Off-Chain)</strong>
+            <p class="mt-6 muted">Value is created, held, and transferred locally through MSL or institutionally through SCL.</p>
+          </div>
+          <div class="landing-card">
+            <strong>Verify &amp; Prove</strong>
+            <p class="mt-6 muted">Cryptographic proofs ensure ownership, integrity, and time-ordering without exposing full histories.</p>
+          </div>
+          <div class="landing-card">
+            <strong>Settle &amp; Interoperate (On-Chain)</strong>
+            <p class="mt-6 muted">When needed, value can be settled or exchanged through the TVM on-chain gateway.</p>
+          </div>
+        </div>
+      </div>
+      <div class="landing-block">
+        <h3>What This Is / What This Is Not</h3>
+        <table class="landing-table">
+          <thead>
+            <tr>
+              <th>This Is</th>
+              <th>This Is Not</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>A value transfer protocol</td>
+              <td>A consumer bank</td>
+            </tr>
+            <tr>
+              <td>Offline-capable infrastructure</td>
+              <td>A speculative token platform</td>
+            </tr>
+            <tr>
+              <td>A ledger architecture</td>
+              <td>A replacement for regulators</td>
+            </tr>
+            <tr>
+              <td>A settlement and interoperability gateway</td>
+              <td>A currency issuer</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="landing-block">
+        <h3>Current Status</h3>
+        <ul class="landing-list">
+          <li>Core protocol implemented</li>
+          <li>BioVault PWA available (MSL)</li>
+          <li>On-chain gateway available for testing and integration</li>
+          <li>SCL deployments subject to institutional agreements and jurisdiction</li>
+          <li>Governance and deployment parameters are configurable per jurisdiction and operator</li>
+        </ul>
+      </div>
     </div>
   </section>
   <!-- BioVault PWA Section (Decentralized MSL - Offchain) -->
@@ -709,8 +870,33 @@
   </div>
   <!-- 🔼🔼🔼 End modals 🔼🔼🔼 -->
   <footer class="app-footer">
-    &copy; 2026 BioVault Software Solutions. All rights reserved.
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <strong>Contact</strong>
+          <div class="mt-6"><a href="mailto:support@biovault.app">support@biovault.app</a></div>
+        </div>
+        <div>
+          <strong>Legal / Context</strong>
+          <div class="mt-6"><a href="terms.html" aria-label="Terms of Use">Terms of Use</a></div>
+          <div class="mt-6"><a href="privacy.html" aria-label="Privacy Policy">Privacy Policy</a></div>
+        </div>
+        <div>
+          <strong>Disclosure</strong>
+          <div class="mt-6">BalanceChain is a protocol framework. Deployment, availability, and features depend on jurisdiction, integration context, and institutional agreements.</div>
+          <div class="mt-6">No digital asset, token, or unit displayed in this interface represents legal tender unless issued by an authorized authority.</div>
+        </div>
+      </div>
+      <div>&copy; <span id="copyright-year">2026</span> BioVault Software Solutions. All rights reserved.</div>
+    </div>
   </footer>
+  <script>
+    (function(){
+      var y = new Date().getFullYear();
+      var el = document.getElementById('copyright-year');
+      if (el) el.textContent = String(y);
+    })();
+  </script>
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
   <!-- Theme -->
