@@ -393,6 +393,247 @@
         text-align: left;
       }
     }
+    /* =========================
+       Blockchain vs BalanceChain
+       ========================= */
+    .bc-compare{
+      margin: 24px 0 28px;
+      padding: 18px 18px 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.03);
+      backdrop-filter: blur(10px);
+    }
+    .bc-compare-head h2{
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: .2px;
+    }
+    .bc-compare-sub{
+      margin: 6px 0 0;
+      opacity: .8;
+      font-size: 13px;
+    }
+    .bc-compare-grid{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+    @media (max-width: 980px){
+      .bc-compare-grid{ grid-template-columns: 1fr; }
+    }
+    .bc-panel{
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.10);
+      background: rgba(0,0,0,.18);
+      padding: 12px;
+      overflow: hidden;
+    }
+    .bc-panel-title{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .bc-pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      font-weight: 700;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      letter-spacing: .2px;
+      border: 1px solid rgba(255,255,255,.14);
+    }
+    .bc-pill-left{ background: rgba(255,255,255,.06); }
+    .bc-pill-right{ background: rgba(0,170,255,.10); }
+    .bc-mini{
+      font-size: 12px;
+      opacity: .75;
+      white-space: nowrap;
+    }
+    .bc-canvas{
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.03);
+      padding: 12px;
+      min-height: 210px;
+      position: relative;
+    }
+    /* LEFT: Blockchain visual */
+    .bc-nodes{
+      display:flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .bc-node{
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      opacity: .9;
+    }
+    .bc-chain{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .bc-block{
+      width: 110px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.04);
+      padding: 10px 10px 9px;
+    }
+    .bc-block-h{ font-weight: 700; font-size: 12px; }
+    .bc-block-b{ margin-top: 4px; font-size: 11px; opacity: .75; }
+    .bc-link{
+      height: 2px;
+      flex: 1;
+      background: linear-gradient(90deg, rgba(255,255,255,.16), rgba(255,255,255,.04));
+      border-radius: 999px;
+      position: relative;
+    }
+    .bc-link::after{
+      content:"";
+      position:absolute;
+      right:-2px; top:-4px;
+      width: 0; height: 0;
+      border-left: 8px solid rgba(255,255,255,.22);
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+    }
+    .bc-ledger{
+      border-radius: 12px;
+      border: 1px dashed rgba(255,255,255,.14);
+      padding: 10px;
+      background: rgba(0,0,0,.10);
+    }
+    .bc-ledger-title{ font-size: 11px; font-weight: 700; opacity: .9; margin-bottom: 8px; }
+    .bc-ledger-rows{ display:grid; gap:6px; }
+    .bc-ledger-row{
+      height: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.06);
+    }
+    /* RIGHT: BalanceChain visual */
+    .bc-vault{
+      border-radius: 12px;
+      border: 1px solid rgba(0,170,255,.18);
+      background: rgba(0,170,255,.05);
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+    .bc-vault-title{
+      font-size: 11px;
+      font-weight: 700;
+      opacity: .9;
+      margin-bottom: 10px;
+    }
+    .bc-balances{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .bc-balance{
+      flex: 1;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.04);
+      padding: 10px;
+      min-width: 120px;
+    }
+    .bc-balance-h{ font-weight: 700; font-size: 12px; }
+    .bc-balance-b{ margin-top: 4px; font-size: 11px; opacity: .75; }
+    .bc-proof{
+      width: 160px;
+      text-align:center;
+    }
+    .bc-proof-chip{
+      display:inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,170,255,.28);
+      background: rgba(0,170,255,.10);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .bc-proof-mini{
+      margin-top: 6px;
+      font-size: 10.5px;
+      opacity: .8;
+    }
+    .bc-offline{
+      margin-top: 10px;
+      font-size: 11px;
+      opacity: .85;
+      display:flex;
+      align-items:center;
+      gap: 8px;
+    }
+    .bc-offline-dot{
+      width: 8px; height: 8px;
+      border-radius: 999px;
+      background: rgba(0,170,255,.9);
+      box-shadow: 0 0 12px rgba(0,170,255,.6);
+    }
+    .bc-gateway{
+      display:flex;
+      align-items:center;
+      gap: 10px;
+    }
+    .bc-gateway-line{
+      height: 2px;
+      flex: 1;
+      border-radius: 999px;
+      background: repeating-linear-gradient(
+        90deg,
+        rgba(0,170,255,.35) 0,
+        rgba(0,170,255,.35) 10px,
+        rgba(0,170,255,.08) 10px,
+        rgba(0,170,255,.08) 18px
+      );
+    }
+    .bc-gateway-box{
+      width: 220px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,170,255,.22);
+      background: rgba(0,170,255,.07);
+      padding: 10px;
+    }
+    .bc-gateway-h{ font-weight: 800; font-size: 11px; }
+    .bc-gateway-b{ margin-top: 4px; font-size: 11px; opacity: .8; }
+    .bc-tags{
+      display:flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .bc-tag{
+      font-size: 11px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      opacity: .9;
+    }
+    .bc-compare-foot{
+      margin-top: 12px;
+      font-size: 12.5px;
+      opacity: .85;
+    }
+    .bc-em{ font-weight: 800; }
+    @media (max-width: 900px){
+      .diagram-wrap{grid-template-columns:1fr}
+    }
     body.theme-light .navbar .nav-link:hover {
       color: #1d4ed8 !important;
     }
@@ -464,6 +705,121 @@
         </div>
       </div>
       <p class="small muted2 mt-10">This interface presents protocol pathways. Availability and deployment depend on jurisdiction and integration context.</p>
+      <section class="bc-compare">
+        <div class="bc-compare-head">
+          <h2>Blockchain vs BalanceChain</h2>
+          <p class="bc-compare-sub">
+            Side-by-side system view: global block ledger vs proof-linked balance states with optional on-chain settlement.
+          </p>
+        </div>
+
+        <div class="bc-compare-grid">
+          <!-- LEFT: BLOCKCHAIN -->
+          <div class="bc-panel">
+            <div class="bc-panel-title">
+              <span class="bc-pill bc-pill-left">Blockchain</span>
+              <span class="bc-mini">Global ledger • Blocks • Validators</span>
+            </div>
+
+            <div class="bc-canvas">
+              <div class="bc-nodes">
+                <div class="bc-node">Node</div>
+                <div class="bc-node">Node</div>
+                <div class="bc-node">Node</div>
+                <div class="bc-node">Node</div>
+                <div class="bc-node">Node</div>
+              </div>
+
+              <div class="bc-chain">
+                <div class="bc-block">
+                  <div class="bc-block-h">Block</div>
+                  <div class="bc-block-b">Tx batch</div>
+                </div>
+                <div class="bc-link"></div>
+                <div class="bc-block">
+                  <div class="bc-block-h">Block</div>
+                  <div class="bc-block-b">Tx batch</div>
+                </div>
+                <div class="bc-link"></div>
+                <div class="bc-block">
+                  <div class="bc-block-h">Block</div>
+                  <div class="bc-block-b">Tx batch</div>
+                </div>
+              </div>
+
+              <div class="bc-ledger">
+                <div class="bc-ledger-title">Global Ledger</div>
+                <div class="bc-ledger-rows">
+                  <div class="bc-ledger-row"></div>
+                  <div class="bc-ledger-row"></div>
+                  <div class="bc-ledger-row"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bc-tags">
+              <span class="bc-tag">Global ordering</span>
+              <span class="bc-tag">Batching</span>
+              <span class="bc-tag">Always online</span>
+              <span class="bc-tag">Network fees</span>
+            </div>
+          </div>
+
+          <!-- RIGHT: BALANCECHAIN -->
+          <div class="bc-panel">
+            <div class="bc-panel-title">
+              <span class="bc-pill bc-pill-right">BalanceChain</span>
+              <span class="bc-mini">Local states • Proof transitions • Offline-first</span>
+            </div>
+
+            <div class="bc-canvas">
+              <div class="bc-vault">
+                <div class="bc-vault-title">Local Balance Space (Device / Institution)</div>
+                <div class="bc-balances">
+                  <div class="bc-balance">
+                    <div class="bc-balance-h">Balance State</div>
+                    <div class="bc-balance-b">SHE Segments</div>
+                  </div>
+
+                  <div class="bc-proof">
+                    <div class="bc-proof-chip">Proof Bundle</div>
+                    <div class="bc-proof-mini">Ownership • Integrity • Time-order</div>
+                  </div>
+
+                  <div class="bc-balance">
+                    <div class="bc-balance-h">Balance State</div>
+                    <div class="bc-balance-b">Updated balance</div>
+                  </div>
+                </div>
+
+                <div class="bc-offline">
+                  <span class="bc-offline-dot"></span>
+                  <span>Offline-capable • No global batching required</span>
+                </div>
+              </div>
+
+              <div class="bc-gateway">
+                <div class="bc-gateway-line"></div>
+                <div class="bc-gateway-box">
+                  <div class="bc-gateway-h">TVM On-Chain Gateway (Optional)</div>
+                  <div class="bc-gateway-b">Settlement • Interoperability</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bc-tags">
+              <span class="bc-tag">Per-user / per-institution state</span>
+              <span class="bc-tag">Proof transitions</span>
+              <span class="bc-tag">Offline-first</span>
+              <span class="bc-tag">Optional settlement</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="bc-compare-foot">
+          Blockchain chains <span class="bc-em">blocks</span> into a global ledger. BalanceChain links <span class="bc-em">balances</span> through verifiable proofs.
+        </div>
+      </section>
       <div class="landing-block">
         <h3>Who This Interface Is For</h3>
         <div class="landing-grid">
@@ -497,45 +853,6 @@
             <p class="mt-6 muted">When needed, value can be settled or exchanged through the TVM on-chain gateway.</p>
           </div>
         </div>
-      </div>
-      <div class="landing-block">
-        <h3>What This Is / What This Is Not</h3>
-        <table class="landing-table">
-          <thead>
-            <tr>
-              <th>This Is</th>
-              <th>This Is Not</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>A value transfer protocol</td>
-              <td>A consumer bank</td>
-            </tr>
-            <tr>
-              <td>Offline-capable infrastructure</td>
-              <td>A speculative token platform</td>
-            </tr>
-            <tr>
-              <td>A ledger architecture</td>
-              <td>A replacement for regulators</td>
-            </tr>
-            <tr>
-              <td>A settlement and interoperability gateway</td>
-              <td>A currency issuer</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="landing-block">
-        <h3>Current Status</h3>
-        <ul class="landing-list">
-          <li>Core protocol implemented</li>
-          <li>BioVault PWA available (MSL)</li>
-          <li>On-chain gateway available for testing and integration</li>
-          <li>SCL deployments subject to institutional agreements and jurisdiction</li>
-          <li>Governance and deployment parameters are configurable per jurisdiction and operator</li>
-        </ul>
       </div>
     </div>
   </section>
