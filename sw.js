@@ -1,13 +1,19 @@
 /* sw.js — Production, 2025-08-19 */
 self.__WB_DISABLE_DEV_LOGS = true;
 
-// Workbox v7
-importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.1.0/workbox-sw.js');
+// Workbox v7 (guarded for CSP / offline)
+let __workboxLoaded = false;
+try {
+  importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.1.0/workbox-sw.js');
+  __workboxLoaded = !!self.workbox;
+} catch (e) {
+  __workboxLoaded = false;
+}
 
 const OFFLINE_URL = '/offline.html';      // optional: add this file to your build
 const FALLBACK_ICON = '/icon-192.png';    // optional: small icon for fallback responses
 
-if (self.workbox) {
+if (self.workbox && __workboxLoaded) {
   const {
     core,
     routing,
