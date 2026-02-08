@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>QCB Serialized QAR – Master Sandbox Demo (v10 READY)</title>
+<title>CB Serialized QAR</title>
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="QCB Sandbox single-file demo with stable responsive layout, no horizontal overflow, full scenarios, balances, dashboards, explorer, validator.">
+<meta name="description" content="CB Sandbox single-file demo with stable responsive layout, no horizontal overflow, full scenarios, balances, dashboards, explorer, validator.">
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet"/>
@@ -264,7 +264,7 @@
     <div class="brand">
       <div class="logo"></div>
       <div>
-        <h1>QCB Serialized QAR – Master Sandbox Demo</h1>
+        <h1>CB Serialized QAR</h1>
         <div class="muted">Stable layout • No horizontal scroll • Full scenarios • Balances • Charts • Explorer • Validator</div>
       </div>
     </div>
@@ -277,7 +277,7 @@
 
   <nav class="tabs" role="tablist">
     <button data-tab="overview" class="active">Overview</button>
-    <button data-tab="qcb">QCB Dashboard</button>
+    <button data-tab="CB">CB Dashboard</button>
     <button data-tab="aml">AML Dashboard</button>
     <button data-tab="sandbox">Sandbox</button>
     <button data-tab="sim">Simulation</button>
@@ -302,7 +302,7 @@
         <h2>Quick Start</h2>
         <ol>
           <li>Go to <em>Sandbox</em> → click <strong>Run All Scenarios</strong>.</li>
-          <li>Open <em>QCB Dashboard</em> to see counts, balances, denomination mix and owners.</li>
+          <li>Open <em>CB Dashboard</em> to see counts, balances, denomination mix and owners.</li>
           <li>Open <em>AML Dashboard</em> for alert ratio and offline commit metrics.</li>
           <li>Use <em>Simulation</em> for exports/imports, offline proof→commit, and detailed serial tables (pinned at bottom).</li>
         </ol>
@@ -310,10 +310,10 @@
     </div>
   </section>
 
-  <!-- QCB DASHBOARD -->
-  <section id="qcb" class="hidden">
+  <!-- CB DASHBOARD -->
+  <section id="CB" class="hidden">
     <div class="card">
-      <h2>QCB Real-Time Dashboard</h2>
+      <h2>CB Real-Time Dashboard</h2>
       <div class="dash">
         <div class="tile"><h3>Total Serials</h3><div class="big" id="qcb_total">0</div><div class="sub">All denominations</div></div>
         <div class="tile"><h3>Total QAR Value</h3><div class="big" id="qcb_value">0</div><div class="sub">Sum(denomination)</div></div>
@@ -371,7 +371,7 @@
       <div class="divider"></div>
       <div class="grid g-3" id="scenarioTiles">
         <div class="tile card">
-          <h3>1 – QCB Issuance → Bank Distribution</h3>
+          <h3>1 – CB Issuance → Bank Distribution</h3>
           <p class="muted">Import test serials, mint twins, distribute to QNB/Doha/QIIB.</p>
           <button id="s1" class="primary">Run</button>
           <div id="s1out" class="mono muted">—</div>
@@ -432,7 +432,7 @@
 
         <div class="tile card">
           <h3>Interactive Timeline Tree (Drag for Transfers)</h3>
-          <p class="muted">Drag a serial pill onto a branch to transfer (QCB-auth simulated).</p>
+          <p class="muted">Drag a serial pill onto a branch to transfer (CB-auth simulated).</p>
           <div id="timelineLite"></div>
           <div class="row"><button id="tlInit" class="primary">Build Timeline</button><button id="tlRefresh">Refresh</button></div>
           <div class="mono mini" id="tlOut">—</div>
@@ -527,7 +527,7 @@
       <div class="row">
         <input id="mintCount" type="number" value="12" />
         <input id="denom" type="number" value="1" />
-        <button id="mintBtn">QCB Mint</button>
+        <button id="mintBtn">CB Mint</button>
       </div>
       <div class="divider"></div>
       <div class="row">
@@ -583,7 +583,7 @@
     </div>
 
     <div class="card">
-      <h2>QCB Checkpoints</h2>
+      <h2>CB Checkpoints</h2>
       <button id="signCheckpoint">Sign Checkpoint</button>
       <pre id="checkpointOut" class="mono">—</pre>
     </div>
@@ -641,7 +641,7 @@
   <section id="docs" class="hidden">
     <div class="card">
       <h2>Documentation & Specs</h2>
-      <pre id="docsContent" class="mono">QCB Serialized QAR System Overview:
+      <pre id="docsContent" class="mono">CB Serialized QAR System Overview:
 
 - **Genesis Bio Constant**: Fixed timestamp for biometric binding.
 - **Bio Tolerance**: 720 seconds for time variance in proofs.
@@ -658,7 +658,7 @@
   7. No duplicate spends.
   8. Denomination integrity.
 
-For more details, refer to QCB specs.</pre>
+For more details, refer to CB specs.</pre>
     </div>
   </section>
 
@@ -709,7 +709,7 @@ function nowSec(){ return Math.floor(Date.now()/1000); }
 
 // STRUCTS
 function newBranch(id, delta, role){ return { id, delta, local_seq: 0, last_global: 0, role }; }
-function newSerial(id, denom){ return { serial_id: id, denomination: denom, current_owner: 'QCB', status: 'Active', history: [], proof_originality: 'QCB_MINT_'+id, parent: null }; }
+function newSerial(id, denom){ return { serial_id: id, denomination: denom, current_owner: 'CB', status: 'Active', history: [], proof_originality: 'QCB_MINT_'+id, parent: null }; }
 function newRecord(serial, event_type, prev_owner, curr_owner, branch_id, delta_branch, local_seq, global_counter, utc_seconds, bio_hash_bound, zk_fresh_proof){
   const prev_hash = serial.history.length>0 ? serial.history[serial.history.length-1].record_hash : 'GENESIS';
   const data = `${event_type}|${prev_owner}|${curr_owner}|${branch_id}|${delta_branch}|${local_seq}|${global_counter}|${utc_seconds}|${bio_hash_bound}|${zk_fresh_proof}|${prev_hash}`;
@@ -734,8 +734,8 @@ async function appendRecord(serial, recData){
 }
 async function addBranch(id, delta, role){ if(state.branches.has(id)) return; state.branches.set(id, newBranch(id, delta, role)); refreshBranches(); }
 function refreshBranches(){ const t = document.getElementById('branchesTbl').tBodies[0]; t.innerHTML=''; state.branches.forEach(b=>{ const r=t.insertRow(); r.innerHTML=`<td>${b.id}</td><td>${b.delta}</td><td>${b.local_seq}</td><td>${b.last_global}</td><td>${b.role}</td>`; }); }
-async function doMint(count, denom){ ensureBase(); for(let i=0;i<count;i++){ const id = 'QAR-'+denom+'-'+String(Math.random()).slice(2,8); const s = newSerial(id, denom); const inc = branchLocalInc('QCB'); await appendRecord(s, { event_type:'Mint', prev_owner:'-', curr_owner:'QCB', branch_id:'QCB', delta_branch:0, local_seq:inc.local_seq, global_counter:inc.global_counter, utc_seconds: nowSec(), bio_hash_bound:'mint', zk_fresh_proof:'mint' }); state.serials.set(id,s); } renderSerialsTable(); refreshSupplyStats(); await updateKPIs(); drawAllCharts(); }
-async function doDistribute(bank, qty){ ensureBase(); let moved=0; for(const [id,s] of state.serials){ if(moved>=qty) break; if(s.current_owner==='QCB'){ await doTransfer(id,'QCB','bank:'+bank,'QCB','Distribute'); moved++; } } refreshSupplyStats(); await updateKPIs(); drawAllCharts(); }
+async function doMint(count, denom){ ensureBase(); for(let i=0;i<count;i++){ const id = 'QAR-'+denom+'-'+String(Math.random()).slice(2,8); const s = newSerial(id, denom); const inc = branchLocalInc('CB'); await appendRecord(s, { event_type:'Mint', prev_owner:'-', curr_owner:'CB', branch_id:'CB', delta_branch:0, local_seq:inc.local_seq, global_counter:inc.global_counter, utc_seconds: nowSec(), bio_hash_bound:'mint', zk_fresh_proof:'mint' }); state.serials.set(id,s); } renderSerialsTable(); refreshSupplyStats(); await updateKPIs(); drawAllCharts(); }
+async function doDistribute(bank, qty){ ensureBase(); let moved=0; for(const [id,s] of state.serials){ if(moved>=qty) break; if(s.current_owner==='CB'){ await doTransfer(id,'CB','bank:'+bank,'CB','Distribute'); moved++; } } refreshSupplyStats(); await updateKPIs(); drawAllCharts(); }
 async function doTransfer(serial_id, prev_owner, curr_owner, branch_id, event_type='Transfer'){
   const s = state.serials.get(serial_id); if(!s || s.current_owner!==prev_owner) throw new Error('Invalid transfer');
   const inc = branchLocalInc(branch_id);
@@ -881,7 +881,7 @@ function printReport(){ window.print(); }
 async function sendOnline(){ try{ const id = (document.getElementById('txSerial').value||'').trim(); const from = (document.getElementById('txFrom').value||'').trim(); const to = (document.getElementById('txTo').value||'').trim(); const fromBranch = (document.getElementById('txFromBranch').value||'').trim(); await doTransfer(id,from,to,fromBranch,'Transfer'); document.getElementById('txOnlineOut').textContent = 'OK'; await updateKPIs(); drawAllCharts(); }catch(e){ document.getElementById('txOnlineOut').textContent = 'Error: '+e.message; } }
 async function exportCBORLike(){ const id = (document.getElementById('offSerial').value||'').trim(); const from = (document.getElementById('offFrom').value||'').trim(); const fromBranch = (document.getElementById('offFromBranch').value||'').trim(); const to = (document.getElementById('offTo').value||'').trim(); const s = state.serials.get(id); if(!s) return; const b = state.branches.get(fromBranch); const draft = { serial_id: s.serial_id, value:s.denomination, history: s.history.map(h=>({record_hash:h.record_hash})), pending: { g_counter:null, utc_seconds: nowSec(), prev_owner: from, curr_owner: to, branch_id: fromBranch, delta_branch: b.delta, local_seq: b.local_seq+1, bio_hash_bound:'offline', zk_fresh_proof:'offline' }, proof_originality: s.proof_originality }; document.getElementById('offlineOut').textContent = JSON.stringify(draft,null,2); }
 async function commitOffline(){ const text = document.getElementById('importText').value||''; const branch = (document.getElementById('commitBranch').value||'').trim(); try{ const container = JSON.parse(text); const s = state.serials.get(container.serial_id); if(!s) throw new Error('Unknown serial'); const inc = branchLocalInc(branch); await appendRecord(s, { event_type:'TransferCommit', prev_owner: container.pending.prev_owner, curr_owner: container.pending.curr_owner, branch_id: branch, delta_branch: state.branches.get(branch).delta, local_seq: inc.local_seq, global_counter: inc.global_counter, utc_seconds: nowSec(), bio_hash_bound: container.pending.bio_hash_bound, zk_fresh_proof: container.pending.zk_fresh_proof }); state.serials.set(s.serial_id,s); document.getElementById('commitOut').textContent='Committed. New owner: '+s.current_owner+'  gC='+inc.global_counter; renderSerialsTable(); await updateKPIs(); drawAllCharts(); }catch(e){ document.getElementById('commitOut').textContent='Error: '+e.message; } }
-async function signCheckpoint(){ const cp = { timestamp: nowSec(), hash: hash(JSON.stringify(Array.from(state.serials.entries()))), signer: 'QCB' }; state.checkpoints.set(cp.timestamp, cp); document.getElementById('checkpointOut').textContent = JSON.stringify(cp, null, 2); LOG('Checkpoint signed at '+cp.timestamp); }
+async function signCheckpoint(){ const cp = { timestamp: nowSec(), hash: hash(JSON.stringify(Array.from(state.serials.entries()))), signer: 'CB' }; state.checkpoints.set(cp.timestamp, cp); document.getElementById('checkpointOut').textContent = JSON.stringify(cp, null, 2); LOG('Checkpoint signed at '+cp.timestamp); }
 
 // Biometric-IBAN Import
 async function bioImport(){
@@ -895,7 +895,7 @@ async function bioImport(){
 async function advAssign(){ const user = (document.getElementById('advUser').value||'user:Ali').trim(); const from = (document.getElementById('advFrom').value||'QNB').trim(); for(const [id,s] of state.serials){ if(s.current_owner==='bank:'+from){ await doTransfer(id,'bank:'+from,user,from,'AssignToUser'); document.getElementById('advOut').textContent = `Assigned ${id} to ${user}`; await updateKPIs(); drawAllCharts(); return; } } document.getElementById('advOut').textContent = 'No available serial at '+from; }
 async function advBulk(){ let c=0; for(const [id,s] of state.serials){ if(c>=20) break; const from = s.current_owner; const to = from.startsWith('bank:')? 'user:Bulk' : 'bank:QNB'; const branch = from.startsWith('bank:')? from.split(':')[1] : 'QNB'; await doTransfer(id,from,to,branch,'Bulk'); c++; } document.getElementById('advOut').textContent = `Executed ${c} demo transfers.`; await updateKPIs(); drawAllCharts(); }
 async function advMint(){ await doMint(12,1); document.getElementById('advOut').textContent = 'Minted +12 demo serials.'; await updateKPIs(); drawAllCharts(); }
-async function advRedeem(){ let c=0; for(const [id,s] of state.serials){ if(c>=12) break; if(s.current_owner.startsWith('bank:')){ await doTransfer(id,s.current_owner,'QCB',s.current_owner.split(':')[1],'Redeem'); c++; } } document.getElementById('advOut').textContent = `Redeemed ${c} to QCB.`; await updateKPIs(); drawAllCharts(); }
+async function advRedeem(){ let c=0; for(const [id,s] of state.serials){ if(c>=12) break; if(s.current_owner.startsWith('bank:')){ await doTransfer(id,s.current_owner,'CB',s.current_owner.split(':')[1],'Redeem'); c++; } } document.getElementById('advOut').textContent = `Redeemed ${c} to CB.`; await updateKPIs(); drawAllCharts(); }
 function advDelete(){ const user = (document.getElementById('advUser').value||'user:Ali').trim(); for(const [id,s] of state.serials){ if(s.current_owner===user){ state.serials.delete(id); } } document.getElementById('advOut').textContent = `Deleted ephemeral vault for ${user}`; renderSerialsTable(); updateKPIs(); drawAllCharts(); }
 
 // Denomination helpers
@@ -905,7 +905,7 @@ async function mintAllDenoms(){
   for(const d of denoms){ await doMint(6,d); }
   // Distribute evenly to banks
   let i=0; const banks=['QNB','Doha','QIIB'];
-  for(const [id,s] of state.serials){ if(s.current_owner==='QCB'){ await doDistribute(banks[i%3],1); i++; } }
+  for(const [id,s] of state.serials){ if(s.current_owner==='CB'){ await doDistribute(banks[i%3],1); i++; } }
   document.getElementById('mintAllOut').textContent = 'Minted x6 of all denominations and distributed evenly.';
 }
 
@@ -1012,15 +1012,15 @@ function switchTab(id){
   document.querySelectorAll('section').forEach(s=> s.classList.add('hidden'));
   document.getElementById(id).classList.remove('hidden');
   // redraw charts when visible to ensure correct size
-  if(id==='qcb' || id==='aml' || id==='sandbox'){ setTimeout(drawAllCharts, 0); }
+  if(id==='CB' || id==='aml' || id==='sandbox'){ setTimeout(drawAllCharts, 0); }
 }
 function resetState(){
   state.branches = new Map(); state.serials = new Map(); state.checkpoints = new Map(); state.kpi = { traceabilityOk:0, traceabilityTotal:0, offlineTotal:0, offlineOk:0, uptime:null, amlPrecision:null }; state.charts = { total: [], ratio: [], alerts: [], offtimes: [] };
   if(logEl) logEl.textContent='—';
-  addBranch('QCB',0,'issuer'); addBranch('QNB',10,'bank'); addBranch('Doha',100,'bank'); addBranch('QIIB',120,'bank');
+  addBranch('CB',0,'issuer'); addBranch('QNB',10,'bank'); addBranch('Doha',100,'bank'); addBranch('QIIB',120,'bank');
   refreshBranches(); renderSerialsTable(); updateKPIs(); renderExplorer(); drawAllCharts();
 }
-function seedSamples(){ if(!state.branches.has('QCB')) addBranch('QCB',0,'issuer'); if(state.serials.size===0){ doMint(6,1).then(updateKPIs).then(renderExplorer).then(drawAllCharts); } else { renderExplorer(); drawAllCharts(); } }
+function seedSamples(){ if(!state.branches.has('CB')) addBranch('CB',0,'issuer'); if(state.serials.size===0){ doMint(6,1).then(updateKPIs).then(renderExplorer).then(drawAllCharts); } else { renderExplorer(); drawAllCharts(); } }
 function boot(){
   resetState();
   // SANDBOX buttons (all wired with outputs)
@@ -1063,6 +1063,12 @@ function boot(){
   document.getElementById('btnClearExplorer').onclick = clearExplorer;
   // Tabs
   document.querySelectorAll('nav.tabs button').forEach(b=> b.onclick = ()=> switchTab(b.getAttribute('data-tab')));
+  // Auto-run all scenarios on load
+  setTimeout(function(){
+    RunAll()
+      .then(mintAllDenoms)
+      .catch(function(e){ console.error('Auto-run failed', e); });
+  }, 0);
 }
 document.addEventListener('DOMContentLoaded',boot);
 </script>
