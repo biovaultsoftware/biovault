@@ -203,11 +203,20 @@
       border: 1px solid var(--app-border);
       box-shadow: var(--app-shadow);
     }
+    body.theme-light .modal-content{
+      background:#ffffff;
+      border-color:rgba(15,23,42,.12);
+      box-shadow:0 10px 24px rgba(15,23,42,.12);
+    }
     .modal-header {
       border-bottom: 1px solid rgba(255,255,255,0.1);
     }
     .modal-footer {
       border-top: 1px solid rgba(255,255,255,0.1);
+    }
+    body.theme-light .modal-header,
+    body.theme-light .modal-footer{
+      border-color:rgba(15,23,42,.12);
     }
     .form-control {
       background: rgba(255,255,255,0.05);
@@ -264,7 +273,14 @@
     }
     body.theme-light .navbar .nav-link,
     body.theme-light .navbar .navbar-brand {
-      color: rgba(11,18,32,.90) !important;
+      color: rgba(11,18,32,.92) !important;
+    }
+    body.theme-light .whitepaper,
+    body.theme-light .chart-container,
+    body.theme-light .card {
+      background:#ffffff;
+      border-color:rgba(15,23,42,.12);
+      box-shadow:0 8px 20px rgba(15,23,42,.08);
     }
   .navbar-brand,
   .navbar .nav-link {

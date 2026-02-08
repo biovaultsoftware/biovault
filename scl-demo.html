@@ -54,6 +54,11 @@
     color:rgba(11,18,32,.95);
     box-shadow:0 0 0 1px rgba(37,99,235,.45) inset;
   }
+  body.theme-light nav.tabs button.active{
+    background:#ffffff;
+    border-color:rgba(37,99,235,.28);
+    box-shadow:0 0 0 1px rgba(37,99,235,.28) inset;
+  }
   /* Light-mode: unify all surfaces & text for clarity */
   body.theme-light{
     color:rgba(11,18,32,.92);
@@ -151,6 +156,26 @@
   button.ok{background:#064e3b;border-color:#065f46}
   button.warn{background:#78350f;border-color:#a16207}
   button.bad{background:#7f1d1d;border-color:#991b1b}
+  body.theme-light button.primary{
+    background:linear-gradient(180deg, rgba(37,99,235,.14), rgba(37,99,235,.04));
+    border-color:rgba(37,99,235,.30);
+    color:rgba(11,18,32,.95);
+  }
+  body.theme-light button.ok{
+    background:linear-gradient(180deg, rgba(22,163,74,.14), rgba(22,163,74,.04));
+    border-color:rgba(22,163,74,.30);
+    color:rgba(11,18,32,.95);
+  }
+  body.theme-light button.warn{
+    background:linear-gradient(180deg, rgba(217,119,6,.16), rgba(217,119,6,.05));
+    border-color:rgba(217,119,6,.30);
+    color:rgba(11,18,32,.95);
+  }
+  body.theme-light button.bad{
+    background:linear-gradient(180deg, rgba(220,38,38,.16), rgba(220,38,38,.05));
+    border-color:rgba(220,38,38,.30);
+    color:rgba(11,18,32,.95);
+  }
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .row > *{flex:1 1 220px}
   .kvs{display:grid;grid-template-columns:240px 1fr;gap:8px 10px;align-items:center}
