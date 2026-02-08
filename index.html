@@ -237,11 +237,22 @@
       max-width: 90%; /* Larger size for better usability */
     }
 
-  .center-action {
+    .center-action {
   display: flex;
   justify-content: center;
   margin-top: 24px;
 }
+
+  .landing-buttons .btn{
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 16px;
+  line-height: 1.2;
+  text-align: center;
+  }
 
   .action-btn {
   width: min(90%, 420px);
@@ -289,6 +300,12 @@
     .navbar .nav-link:hover {
       color: var(--app-accent) !important;
     }
+    .app-footer{
+      padding: 18px 0 26px;
+      text-align: center;
+      color: var(--app-muted);
+      font-size: 12px;
+    }
     body.theme-light .navbar .nav-link:hover {
       color: #1d4ed8 !important;
     }
@@ -314,7 +331,7 @@
   <!-- Global Navbar -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-transparent fixed-top" role="navigation" aria-label="Main navigation">
     <div class="container">
-      <a class="navbar-brand neon-text" href="#" onclick="showSection('landing')" aria-label="Go to Home">TVM Ecosystem</a>
+      <a class="navbar-brand neon-text" href="#" onclick="showSection('landing')" aria-label="Go to Home">BalanceChain Value Transfer Ecosystem</a>
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
               aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
         <span class="navbar-toggler-icon"></span>
@@ -324,7 +341,7 @@
           <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('landing')">Home</a></li>
           <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('biovault')">BioVault (MSL)</a></li>
           <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('scl')">SCL Overview</a></li>
-          <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('dashboard')">Dashboard</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('dashboard')">On-Chain Gateway</a></li>
           <li class="nav-item">
           <button id="theme-toggle" class="btn btn-outline-light ms-2" type="button" aria-pressed="false">Theme</button>
         </li>
@@ -335,40 +352,48 @@
   <!-- Landing Page Section -->
   <section id="landing" class="section landing active-section fade-in" aria-label="Landing">
     <div class="container">
-      <h1 class="display-3 neon-text">True Value of Money (TVM) Ecosystem</h1>
+      <h1 class="display-3 neon-text">BalanceChain Value Transfer Ecosystem</h1>
       <p class="lead">
-        Enter the Offchain or Onchain World. BalanceChain: Superior to Blockchain, SWIFT, and Fiat – Instant, Offline-Capable, Zero-Fee P2P Transfers with SHE/ECF Framework and TVM Gateway.
-        1 TVM = 12 SHE (fixed ratio). The USDT price of TVM is dynamic, updated annually on Jan 11 by a GDP/capita rule (never below 1 USD). Example (2025): 1 TVM ≈ 1.153 USDT (illustrative; not a peg).
+        <strong>Choose Your Path: Off-Chain or On-Chain</strong><br />
+        BalanceChain is an instant, offline-capable value transfer system enabling zero-fee peer-to-peer transactions.<br />
+        It operates through a human-centric economic framework (SHE/ECF) with an optional on-chain TVM gateway.
       </p>
-      <div class="row justify-content-center mt-5">
+      <div class="row justify-content-center mt-5 landing-buttons">
         <div class="col-md-4">
           <button class="btn btn-primary btn-lg w-100 mb-4" type="button" onclick="showSection('biovault')">
-            <i class="fas fa-lock me-2" aria-hidden="true"></i> Enter Decentralized MSL (P2P BioVault PWA)
+            <i class="fas fa-lock me-2" aria-hidden="true"></i> Decentralized MSL (BioVault PWA)
           </button>
         </div>
         <div class="col-md-4">
           <button class="btn btn-primary btn-lg w-100 mb-4" type="button" onclick="showSection('scl')">
-            <i class="fas fa-building-columns me-2" aria-hidden="true"></i> Enter Centralized SCL (CBDC-Fiat Twin)
+            <i class="fas fa-building-columns me-2" aria-hidden="true"></i> Centralized SCL (CBDC–Fiat Twin)
           </button>
         </div>
         <div class="col-md-4">
           <button class="btn btn-primary btn-lg w-100 mb-4" type="button" onclick="showSection('dashboard')">
-            <i class="fas fa-link me-2" aria-hidden="true"></i> Enter Blockchain (TVM Token Gateway)
+            <i class="fas fa-link me-2" aria-hidden="true"></i> On-Chain Gateway (TVM)
           </button>
         </div>
       </div>
+      <p class="small muted2 mt-10">This interface presents protocol pathways. Availability and deployment depend on jurisdiction and integration context.</p>
     </div>
   </section>
   <!-- BioVault PWA Section (Decentralized MSL - Offchain) -->
   <section id="biovault" class="section container fade-in" aria-label="BioVault PWA">
-    <h2 class="neon-text">BioVault PWA - Decentralized MSL (Micro Segments Ledger)</h2>
-    <p class="lead">No authority, complete immutability and security. Manage SHE segments, generate proofs, and perform offline P2P transfers. Gateway to TVM blockchain for swaps and crypto entry.</p>
+    <h2 class="neon-text">BioVault PWA — Decentralized MSL (Micro Segments Ledger)</h2>
+    <p class="lead">BioVault is a decentralized, offline-first Progressive Web App implementing the BalanceChain MSL protocol.
+    It enables peer-to-peer value transfer without intermediaries, supports offline operation, and allows users to manage SHE-denominated segments, generate cryptographic proofs, and perform secure P2P transfers.
+    An optional on-chain TVM gateway is available for settlement, swaps, and interoperability with blockchain systems.</p>
     <!-- White Paper -->
     <div class="whitepaper">
-      <h3>BalanceChain White Paper</h3>
-      <p><strong>Abstract:</strong> BalanceChain is a revolutionary SHE-powered microledger protocol that humanizes money by grounding its value in Standard Human Effort (SHE), a standardized measure of labor akin to horsepower for engines, derived from 100-year global economic data (average GDP/capita ~$10,000/year, 2000 work hours = $5/hour baseline, 1 hour = 60 SHE units, e.g., moving 100 bricks). SHE equalizes effort across borders, addressing disparities, while the Efficiency Correction Factor (ECF = Country GDP/capita ÷ Global average $10,000) adjusts for productivity variances (e.g., USA ECF=8 at $80,000 = $40/hour; India ECF=0.25 at $2,500 = $1.25/hour), serving as a diagnostic tool to fix imbalances through policies like improved education and infrastructure.</p>
-      <p>The protocol introduces True Value of Money (TVM), with 1 TVM = 12 SHE (fixed ratio). The USDT price of TVM is dynamic, updated annually on Jan 11 by a GDP/capita rule (never below 1 USD). Example (2025): 1 TVM ≈ 1.153 USDT (illustrative; not a peg). TVM is not a new currency but a complement that infuses intrinsic effort-based value into fiat and crypto, defining money's true worth as standardized human effort—specifically transacting, the only mutual economic activity all humans share, with offline capabilities removing differences. A 51% Human Investment (HI) / 49% AI rule ensures at least 51% of economic output remains human-driven (effort, creativity, ethics), capping AI at 49% to prevent dominance, job loss, or gaps; excess growth (e.g., from AI boosting GDP) splits 51% to humans via UBI-like Bio-Balance (60,000 SHE units/vault ~$5,000 start, covering 40-50% essentials like food/shelter/health) and shorter workweeks, while 49% fuels tech—promoting fair gains, productivity, and cooperation over resource conflicts (e.g., oil worthless without effort, lessons from COVID unity).</p>
-      <p>As a hybrid offchain-onchain system, BalanceChain uses a personal tamper-proof microledger (local IndexedDB, AES-GCM encrypted, WebAuthn biometrics like Face ID/fingerprint—COVID-proven, user-friendly) for offchain segment management (12,000 segments/year as SHE units, initial 1,200 unlocked in Layer 0) and onchain TVM issuance (1,000 TVM/year, 0 initial unlocked). Deterministic 10-layer chaining (1200 segments/layer; Segment N in Layer L unlocks N in L+1) enables cascading unlocks with time-based security (bio-constants from genesis 1736565605 + increments, strictly increasing with BIO tolerance = 720 seconds, preventing fraud/replay/backdating). Hierarchical caps control release (daily 360 segments/30 TVM, monthly 3600/300, yearly 10800/900; 5-year max 60,000 segments/5,000 TVM, halt/reset afterward). Offchain proofs (ownership with spent proof: org/prev match, curr differs; bio-integrity) submitted onchain mint TVM (12 segments = 1 TVM, extra 100 at yearly cap for parity), linking device key hash to wallet. Segment proofs include: <code>segmentIndex</code>, <code>currentBioConst</code>, <code>ownershipProof</code>, <code>unlockIntegrityProof</code>, <code>spentProof</code>, <code>ownershipChangeCount</code>, <code>biometricZKP</code>. All claims/exchanges require an EIP-712 signed bundle that includes <code>biometricZKP</code>.</p>
+      <h3>BalanceChain White Paper — Abstract</h3>
+      <p>BalanceChain is a human-centric micro-ledger protocol designed to support secure, auditable value transfer without reliance on global consensus networks.
+      The system is grounded in Standard Human Effort (SHE) as a unit of economic reference, with the Efficiency Correction Factor (ECF) providing a contextual adjustment layer for comparative economic analysis.</p>
+      <p>The protocol defines True Value of Money (TVM) as an on-chain settlement and interoperability instrument, with a fixed internal conversion ratio of 1 TVM = 12 SHE.
+      TVM is not a sovereign currency and does not represent a price peg to any fiat or digital asset.</p>
+      <p>BalanceChain operates as a hybrid off-chain / on-chain system.
+      Users maintain a personal, tamper-resistant micro-ledger locally on their device, secured through modern cryptography and biometric authentication.
+      Time-ordered segment proofs enable deterministic validation, offline operation, and secure ownership transfer, while optional on-chain interactions allow external settlement without exposing full transaction histories.</p>
       <a href="#" class="btn btn-secondary w-100" role="button" aria-label="Download Whitepaper" onclick="alert('Downloading full whitepaper PDF...')">
         <i class="fas fa-download me-2" aria-hidden="true"></i> Download Full White Paper
       </a>
@@ -456,8 +481,11 @@
   </section>
   <!-- Blockchain Dashboard Section (Onchain - TVM Gateway) -->
   <section id="dashboard" class="section container fade-in" aria-label="Blockchain Dashboard">
-    <h2 class="neon-text">TVM Blockchain Dashboard (Gateway to DLT)</h2>
-    <p class="lead">Connect your wallet and interact with the TVM contract for claims, swaps, and exchanges. Fixed at 12 SHE per TVM with dynamic pricing. Serves as gateway for both MSL and SCL versions. Actions auto-populate from BalanceChain proofs for seamless UX—just click buttons.</p>
+    <h2 class="neon-text">TVM On-Chain Gateway (Distributed Ledger Interface)</h2>
+    <p class="lead">Connect a compatible wallet to interact with the TVM smart contract for claims, exchanges, and settlement operations.
+    The gateway applies a fixed internal conversion of 12 SHE per TVM and supports protocol-defined dynamic valuation.</p>
+    <p class="lead">This interface serves as the on-chain interoperability layer for both MSL (decentralized) and SCL (centralized) BalanceChain systems.
+    Actions are automatically populated from verified BalanceChain proofs to ensure a streamlined and consistent user experience.</p>
 <a href="demos/tvm-wallet.html" class="btn btn-warning w-100" id="openWalletDemo">
   <span style="margin-right:10px">💼</span> Balancechain explorer
 </a>
@@ -680,6 +708,9 @@
     </div>
   </div>
   <!-- 🔼🔼🔼 End modals 🔼🔼🔼 -->
+  <footer class="app-footer">
+    &copy; 2026 BioVault Software Solutions. All rights reserved.
+  </footer>
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
   <!-- Theme -->
