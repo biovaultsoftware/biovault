@@ -183,6 +183,14 @@ body.theme-light .btn-soft{
 .h3-sm{margin:0 0 10px 0;font-size:14px}
 .h3-sm-tight{margin:14px 0 8px 0;font-size:14px}
 .pre-muted{color:var(--app-muted)}
+
+@media (max-width: 520px){
+  .minw-360{min-width:0;width:100%}
+  .minw-160{min-width:0;width:100%}
+  .minw-90{min-width:0;width:100%}
+  .w-160{width:100%}
+  .maxw-180{max-width:100%;width:100%}
+}
 .bar > i{width:var(--bar-w,0%)}
 
 .has-fixed-nav{

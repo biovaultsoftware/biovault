@@ -423,6 +423,17 @@
     @media (max-width: 980px){
       .bc-compare-grid{ grid-template-columns: 1fr; }
     }
+    @media (max-width: 700px){
+      .bc-panel-title{flex-direction:column;align-items:flex-start}
+      .bc-mini{white-space:normal}
+      .bc-chain{flex-direction:column}
+      .bc-link{width:100%;height:2px}
+      .bc-block{width:100%}
+      .bc-balances{flex-direction:column;align-items:stretch}
+      .bc-proof{width:100%}
+      .bc-gateway{flex-direction:column;align-items:stretch}
+      .bc-gateway-box{width:100%}
+    }
     .bc-panel{
       border-radius: 16px;
       border: 1px solid rgba(255,255,255,.10);
@@ -1272,6 +1283,18 @@
   </script>
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var nav = document.getElementById('navbarNav');
+      if (!nav || !window.bootstrap) return;
+      var collapse = bootstrap.Collapse.getOrCreateInstance(nav, { toggle: false });
+      nav.querySelectorAll('.nav-link, .navbar-brand').forEach(function(link){
+        link.addEventListener('click', function(){
+          if (nav.classList.contains('show')) collapse.hide();
+        });
+      });
+    });
+  </script>
   <!-- Theme -->
   <script>
     (function(){

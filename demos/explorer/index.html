@@ -12,6 +12,10 @@
   <style>
     body{font-family:var(--app-font-sans);margin:24px;background:var(--app-body-bg);color:var(--app-ink)}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    @media (max-width: 520px){
+      .row{align-items:flex-start}
+      .tag{width:100%;justify-content:flex-start}
+    }
     textarea,input,button{padding:10px 12px;font-size:14px;border:1px solid var(--app-border);border-radius:12px;background:var(--app-panel-2);color:var(--app-ink)}
     textarea{width:780px;max-width:100%;height:88px}
     table{width:100%;border-collapse:collapse;margin-top:16px}

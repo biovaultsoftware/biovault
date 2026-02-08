@@ -33,6 +33,11 @@
   .wrap{max-width:1280px;margin:0 auto;padding:16px 20px 40px;width:100%}
   header{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap}
   .header-actions{display:flex;gap:8px;flex-wrap:wrap}
+  @media (max-width: 520px){
+    header{align-items:flex-start}
+    .header-actions{width:100%}
+    .header-actions .tag{width:100%;justify-content:flex-start}
+  }
   .btn-soft{padding:8px 12px;border-radius:12px}
   h1{margin:0;font-size:clamp(22px,2.4vw,30px);letter-spacing:.2px;font-weight:700}
   .brand{display:flex;align-items:center;gap:10px}
