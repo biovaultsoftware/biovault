@@ -649,7 +649,60 @@
   <!-- Safe stubs so inline onclicks don't crash before app boots -->
   <script>
     window.__BioVaultReady = false;
-    window.showSection = window.showSection || function(){ console.warn('[BioVault] App not ready yet.'); };
+    window.__BioVaultLoading = false;
+    function basicShowSection(id){
+      var secs = document.querySelectorAll('.section');
+      for (var i=0;i<secs.length;i++) secs[i].classList.remove('active-section');
+      var tgt = document.getElementById(id);
+      if (tgt) tgt.classList.add('active-section');
+    }
+    function loadBioVaultApp(){
+      if (window.__BioVaultReady || window.__BioVaultLoading) return Promise.resolve();
+      window.__BioVaultLoading = true;
+      function inject(src){
+        return new Promise(function(resolve, reject){
+          var s = document.createElement('script');
+          s.src = src;
+          s.async = false;
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+      return (async function(){
+        try {
+          await inject('https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js');
+          console.log('[BioVault] ethers ready (jsDelivr)');
+        } catch (e1) {
+          console.warn('[BioVault] jsDelivr failed, trying unpkg…');
+          await inject('https://unpkg.com/ethers@6.13.2/dist/ethers.umd.min.js');
+          console.log('[BioVault] ethers ready (unpkg)');
+        }
+      })().catch(function(e){
+        console.error('[BioVault] Failed to load ethers from both CDNs — blockchain features disabled.', e);
+      }).finally(function(){
+        return inject('main.js').then(function(){
+          window.__BioVaultReady = true;
+          window.__BioVaultLoading = false;
+          console.log('[BioVault] main.js loaded');
+        }).catch(function(e2){
+          window.__BioVaultLoading = false;
+          console.error('[BioVault] Failed to load main.js', e2);
+        });
+      });
+    }
+    window.showSection = function(id){
+      if (id === 'biovault' || id === 'dashboard') {
+        basicShowSection(id);
+        loadBioVaultApp().then(function(){
+          if (window.showSection && window.showSection !== arguments.callee) {
+            window.showSection(id);
+          }
+        });
+        return;
+      }
+      basicShowSection(id);
+    };
     window.exportProofToBlockchain = window.exportProofToBlockchain || function(){ console.warn('[BioVault] App not ready yet.'); };
     window.addEventListener('error', e => console.error('[BioVault] Uncaught:', e.error || e.message));
   </script>
@@ -1245,50 +1298,6 @@
       }
     })();
   </script>
-  <!-- Boot loader: load Ethers with fallback, then load main.js -->
-  <script>
-    (function () {
-      function inject(src) {
-        return new Promise(function (resolve, reject) {
-          var s = document.createElement('script');
-          s.src = src;
-          s.async = false; // keep order
-          s.onload = resolve;
-          s.onerror = reject;
-          document.head.appendChild(s);
-        });
-      }
-      async function loadEthers() {
-        try {
-          await inject('https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js');
-          console.log('[BioVault] ethers ready (jsDelivr)');
-        } catch (e1) {
-          console.warn('[BioVault] jsDelivr failed, trying unpkg…');
-          await inject('https://unpkg.com/ethers@6.13.2/dist/ethers.umd.min.js');
-          console.log('[BioVault] ethers ready (unpkg)');
-        }
-      }
-      async function boot() {
-        try {
-          await loadEthers();
-        } catch (e) {
-          console.error('[BioVault] Failed to load ethers from both CDNs — blockchain features disabled.', e);
-        } finally {
-          try {
-            await inject('main.js'); // load your app after ethers attempt
-            window.__BioVaultReady = true;
-            console.log('[BioVault] main.js loaded');
-          } catch (e2) {
-            console.error('[BioVault] Failed to load main.js', e2);
-          }
-        }
-      }
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', boot, { once: true });
-      } else {
-        boot();
-      }
-    })();
-  </script>
+  <!-- BioVault app loads on demand when BioVault or On-Chain Gateway is opened -->
 </body>
 </html>

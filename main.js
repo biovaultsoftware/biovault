@@ -1902,6 +1902,7 @@ function showSection(id) {
   for (var i=0;i<secs.length;i++) secs[i].classList.remove('active-section');
   var tgt = document.getElementById(id);
   if (tgt) tgt.classList.add('active-section');
+  if (id === 'biovault') ensureBioVaultInit();
   if (id === 'dashboard') loadDashboardData();
   if (id === 'biovault' && vaultUnlocked) {
     var wp = document.querySelector('#biovault .whitepaper'); if (wp) wp.classList.add('hidden');
@@ -2293,4 +2294,10 @@ async function loadDashboardData() {
     });
   }
 }
-init();
+// Defer BioVault init until user explicitly opens BioVault
+window.__BioVaultInitStarted = false;
+function ensureBioVaultInit(){
+  if (window.__BioVaultInitStarted) return;
+  window.__BioVaultInitStarted = true;
+  init().catch(function(e){ console.error('[BioVault] init failed', e); });
+}
